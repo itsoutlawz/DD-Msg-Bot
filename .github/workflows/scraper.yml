@@ -1,52 +1,83 @@
-name: DamaDam Scraper💙
+name: Damadam Scraper Bot💛
 
 on:
   schedule:
-    - cron: "*/30 * * * *"      # ▶️ Every 30 minutes
-  workflow_dispatch:            # ▶️ Manual run
+    - cron: "*/30 * * * *"   # Run every 30 minutes
+  workflow_dispatch:         # Manual run option
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      # ---------------------------
+      # 1. Checkout repository
+      # ---------------------------
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.11"
+      # ---------------------------
+      # 2. Setup Python
+      # ---------------------------
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    - name: Install Chrome
-      uses: browser-actions/setup-chrome@v1
+      # ---------------------------
+      # 3. Install Chrome
+      # ---------------------------
+      - name: Install Google Chrome
+        run: |
+          sudo apt update
+          sudo apt install -y wget unzip
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      # ---------------------------
+      # 4. Install ChromeDriver
+      # ---------------------------
+      - name: Install ChromeDriver
+        run: |
+          CHROME_VERSION=$(google-chrome --version | sed 's/Google Chrome //')
+          CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d'.' -f1)
+          wget https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chromedriver-linux64.zip
+          unzip chromedriver-linux64.zip
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/chromedriver
 
-    # -------------------------------------------
-    # 1️⃣ Load credentials JSON from Secrets
-    # -------------------------------------------
-    - name: Write Google Credentials File
-      run: |
-        echo "${{ secrets.DD_CREDENTIALS_JSON }}" > credentials.json
+      # ---------------------------
+      # 5. Install Python Requirements
+      # ---------------------------
+      - name: Install Requirements
+        run: |
+          pip install --upgrade pip
+          pip install selenium==4.28.1
+          pip install oauth2client gspread google-auth google-auth-oauthlib google-auth-httplib2
 
-    # -------------------------------------------
-    # 2️⃣ Export environment variables for Python
-    # -------------------------------------------
-    - name: Set Env Vars
-      run: |
-        echo "DD_LOGIN_EMAIL=${{ secrets.DD_LOGIN_EMAIL }}" >> $GITHUB_ENV
-        echo "DD_LOGIN_PASS=${{ secrets.DD_LOGIN_PASS }}" >> $GITHUB_ENV
-        echo "DD_SHEET_ID=${{ secrets.DD_SHEET_ID }}" >> $GITHUB_ENV
-        echo "COOKIE_FILE=${{ secrets.COOKIE_FILE }}" >> $GITHUB_ENV
-        echo "CREDENTIALS_FILE=credentials.json" >> $GITHUB_ENV
+      # ---------------------------
+      # 6. Create credentials.json from secret
+      # ---------------------------
+      - name: Create credentials.json
+        run: |
+          echo "${{ secrets.DD_CREDENTIALS_JSON }}" > credentials.json
 
-    # -------------------------------------------
-    # 3️⃣ Run Main Scraper
-    # -------------------------------------------
-    - name: Run Scraper
-      run: |
-        python Scraper.py
+      # ---------------------------
+      # 7. Create Cookie File (EMPTY IF NOT EXISTS IN SECRET)
+      # ---------------------------
+      - name: Create cookie file
+        run: |
+          echo "${{ secrets.COOKIE_FILE }}" > damadam_cookies.pkl || true
+
+      # ---------------------------
+      # 8. Run the Scraper
+      # ---------------------------
+      - name: Run Scraper
+        env:
+          DD_LOGIN_EMAIL: ${{ secrets.DD_LOGIN_EMAIL }}
+          DD_LOGIN_PASS: ${{ secrets.DD_LOGIN_PASS }}
+          DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
+          COOKIE_FILE: "damadam_cookies.pkl"
+          CREDENTIALS_FILE: "credentials.json"
+        run: |
+          python Scraper.py
