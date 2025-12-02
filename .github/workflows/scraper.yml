@@ -1,89 +1,47 @@
-name: Damadam Scraper Bot💛
+name: Run Scraper
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"   # Run every 30 minutes
-  workflow_dispatch:         # Manual run option
+    - cron: '*/30 * * * *'
 
 jobs:
-  run-bot:
+  run-scraper:
     runs-on: ubuntu-latest
-
     steps:
-      # ---------------------------
-      # 1. Checkout repository
-      # ---------------------------
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # ---------------------------
-      # 2. Setup Python
-      # ---------------------------
-      - name: Setup Python 3.10
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.11'
 
-      # ---------------------------
-      # 3. Install Chrome
-      # ---------------------------
-      - name: Install Google Chrome
+      - name: Setup Chrome browser
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: latest
+
+      - name: Install ChromeDriver
+        uses: nanasess/setup-chromedriver@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y wget unzip
-          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # ---------------------------
-      # 4. Install ChromeDriver
-      # ---------------------------
-      - name: Install ChromeDriver (Fixed Stable)
+      - name: Restore service account credentials
         run: |
-          sudo apt update
-          sudo apt install -y wget unzip
+          echo "$DD_CREDENTIALS_JSON" > credentials.json
+        env:
+          DD_CREDENTIALS_JSON: ${{ secrets.DD_CREDENTIALS_JSON }}
 
-          # Download ChromeDriver stable (matching stable Chrome)
-          DRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/142.0.7429.0/linux64/chromedriver-linux64.zip"
-
-          wget -O chromedriver.zip "$DRIVER_URL"
-          unzip chromedriver.zip
-
-          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
-          sudo chmod +x /usr/local/bin/chromedriver
-
-      # ---------------------------
-      # 5. Install Python Requirements
-      # ---------------------------
-      - name: Install Requirements
-        run: |
-          pip install --upgrade pip
-          pip install selenium==4.28.1
-          pip install oauth2client gspread google-auth google-auth-oauthlib google-auth-httplib2
-
-      # ---------------------------
-      # 6. Create credentials.json from secret
-      # ---------------------------
-      - name: Create credentials.json
-        run: |
-          echo "${{ secrets.DD_CREDENTIALS_JSON }}" > credentials.json
-
-      # ---------------------------
-      # 7. Create Cookie File (EMPTY IF NOT EXISTS IN SECRET)
-      # ---------------------------
-      - name: Create cookie file
-        run: |
-          echo "${{ secrets.COOKIE_FILE }}" > damadam_cookies.pkl || true
-
-      # ---------------------------
-      # 8. Run the Scraper
-      # ---------------------------
-      - name: Run Scraper
+      - name: Run scraper
         env:
           DD_LOGIN_EMAIL: ${{ secrets.DD_LOGIN_EMAIL }}
           DD_LOGIN_PASS: ${{ secrets.DD_LOGIN_PASS }}
           DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
-          COOKIE_FILE: "damadam_cookies.pkl"
-          CREDENTIALS_FILE: "credentials.json"
-        run: |
-          python Scraper.py
-
+          COOKIE_FILE: ${{ secrets.COOKIE_FILE }}
+        run: python Scraper.py
