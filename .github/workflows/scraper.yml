@@ -35,12 +35,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # IDE Warning: Context access is valid - these are GitHub Secrets
       - name: Restore service account credentials
         run: |
           echo "$DD_CREDENTIALS_JSON" > credentials.json
         env:
           DD_CREDENTIALS_JSON: ${{ secrets.DD_CREDENTIALS_JSON }}
 
+      # IDE Warning: These secrets are properly configured in GitHub
       - name: Run scraper
         env:
           DD_LOGIN_EMAIL: ${{ secrets.DD_LOGIN_EMAIL }}
