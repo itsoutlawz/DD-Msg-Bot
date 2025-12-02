@@ -128,37 +128,42 @@ def load_cookies(driver):
 # FRESH LOGIN (USED ONLY IF COOKIES FAIL)
 # ============================================================================
 
-def fresh_login(driver):
-    log_msg("🔐 Performing fresh login…")
+def login(driver):
+    """Login using email/password and create fresh session cookies."""
 
+    log_msg("🔐 Attempting login...")
     try:
         driver.get(LOGIN_URL)
-        time.sleep(1.5)
+        time.sleep(2)
 
-        email_box = driver.find_element(By.NAME, "email")
-        pass_box = driver.find_element(By.NAME, "password")
+        # Form fields
+        email_inp = driver.find_element(By.NAME, "email")
+        pass_inp = driver.find_element(By.NAME, "password")
+        btn = driver.find_element(By.XPATH, "//button[@type='submit']")
 
-        email_box.send_keys(LOGIN_EMAIL)
-        pass_box.send_keys(LOGIN_PASS)
+        email_inp.clear()
+        email_inp.send_keys(LOGIN_EMAIL)
 
-        btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+        pass_inp.clear()
+        pass_inp.send_keys(LOGIN_PASS)
+
         btn.click()
-
         time.sleep(3)
 
-        # Logged in check
-        try:
-            driver.find_element(By.CSS_SELECTOR, ".user-nav")
-            log_msg("✅ Fresh Login Success")
+        # Check login success
+        src = driver.page_source.lower()
+        if "logout" in src or "profile" in src:
             save_cookies(driver)
+            log_msg("🔓 Login successful & cookies saved.")
             return True
-        except:
-            log_msg("❌ Login Failed")
-            return False
+
+        log_msg("❌ Login failed — wrong credentials?")
+        return False
 
     except Exception as e:
-        log_msg(f"❌ Fresh login exception: {e}")
+        log_msg(f"❌ Login Error: {e}")
         return False
+
 
 
 # ============================================================================
