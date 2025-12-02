@@ -1241,3 +1241,41 @@ def main():
     finally:
         driver.quit()
         log_msg("🔒 Browser closed")
+
+# ============================================================================
+# GLOBAL EXIT FLAG (SAFE SHUTDOWN)
+# ============================================================================
+
+should_exit = False
+
+def signal_handler(sig, frame):
+    """
+    Graceful shutdown — agar GitHub Actions / Cron kill signal de.
+    """
+    global should_exit
+    log_msg("\n🛑 Shutdown signal received — completing current task...")
+    should_exit = True
+
+
+# ============================================================================
+# MAIN ENTRY — SCHEDULER / GITHUB ACTION FRIENDLY
+# ============================================================================
+
+if __name__ == "__main__":
+    import signal
+
+    # Trap exit signals
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        log_msg("🚀 Script starting...")
+        main()
+
+    except KeyboardInterrupt:
+        signal_handler(None, None)
+
+    except Exception as e:
+        log_msg(f"❌ Fatal Error: {e}")
+        sys.exit(1)
+
