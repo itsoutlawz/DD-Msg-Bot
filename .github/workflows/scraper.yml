@@ -44,9 +44,9 @@ jobs:
           chrome-version: latest
 
       - name: Install ChromeDriver
-        uses: nanasess/setup-chromedriver@v2
+        uses: nanasess/setup-chromedriver@master
         with:
-          chromedriver-version: 103.0.5042.13
+          chromedriver-version: latest
 
       - name: Install dependencies
         run: |
