@@ -90,8 +90,8 @@ PROFILES_COLUMN_SPECS = {
 }
 
 RUNLIST_COLUMN_SPECS = {
-    "widths": [200, 140, 200, 100, 100, 300
-    "alignments": ["L", "C", "L", "C", "C", "L"
+    "widths": [200, 140, 200, 100, 100, 300],
+    "alignments": ["L", "C", "L", "C", "C", "L"],
     "wrap": ["CLIP"] * 6
 }
 
