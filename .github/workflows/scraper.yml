@@ -6,12 +6,25 @@ on:
       run_type:
         description: 'Choose a label for this run (appears in workflow summary).'
         required: false
-        default: 'scheduled'
+        default: 'manual'
+      profiles_count:
+        description: 'How many profiles to scrape? (1=10, 2=50, 3=100)'
+        required: false
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+      batch_size:
+        description: 'Batch size for processing'
+        required: false
+        default: '5'
       comment:
         description: 'Optional note explaining why the workflow was triggered.'
         required: false
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 */2 * * *'
 
 jobs:
   run-scraper:
