@@ -1,3 +1,10 @@
-gspread>=5.8.0
-google-auth>=2.20.0
-selenium==4.27.1
+selenium==4.27.1        # Stable, Chrome 131+ compatible
+webdriver-manager       # Auto driver installer
+gspread                 # Google Sheets read/write
+oauth2client            # Service account auth
+google-auth             # Required for creds
+google-auth-oauthlib    # Auth helper
+google-auth-httplib2    # Auth transport
+pytz                    # Time zone handling
+requests                # API calls / HTTP
+urllib3                 # Required by Selenium
