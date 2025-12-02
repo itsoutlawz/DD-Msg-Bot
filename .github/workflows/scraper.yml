@@ -37,12 +37,17 @@ jobs:
       # ---------------------------
       # 4. Install ChromeDriver
       # ---------------------------
-      - name: Install ChromeDriver
+      - name: Install ChromeDriver (Fixed Stable)
         run: |
-          CHROME_VERSION=$(google-chrome --version | sed 's/Google Chrome //')
-          CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d'.' -f1)
-          wget https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chromedriver-linux64.zip
-          unzip chromedriver-linux64.zip
+          sudo apt update
+          sudo apt install -y wget unzip
+
+          # Download ChromeDriver stable (matching stable Chrome)
+          DRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/142.0.7429.0/linux64/chromedriver-linux64.zip"
+
+          wget -O chromedriver.zip "$DRIVER_URL"
+          unzip chromedriver.zip
+
           sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
           sudo chmod +x /usr/local/bin/chromedriver
 
@@ -81,3 +86,4 @@ jobs:
           CREDENTIALS_FILE: "credentials.json"
         run: |
           python Scraper.py
+
