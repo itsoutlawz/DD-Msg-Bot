@@ -48,22 +48,31 @@ def get_pkt_time():
 # SELENIUM DRIVER INIT (HEADLESS, GH ACTIONS SAFE)
 # ============================================================================
 
-def init_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1280,800")
-    chrome_options.add_argument("--disable-notifications")
-    chrome_options.add_argument("--disable-infobars")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--ignore-certificate-errors")
+def setup_browser():
+    """Creates Chrome webdriver for both local and GitHub Actions."""
 
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.implicitly_wait(5)
+    options = webdriver.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--window-size=1280,800")
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-blink-features=AutomationControlled")
 
-    return driver
+    # Headless mode ON for GitHub Actions
+    options.add_argument("--headless=new")
+
+    try:
+        driver = webdriver.Chrome(options=options)
+        return driver
+    except Exception as e:
+        log_msg(f"❌ Browser launch failed: {e}")
+        raise
+
 
 
 # ============================================================================
