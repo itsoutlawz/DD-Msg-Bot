@@ -1,1 +1,47 @@
+name: Run Scraper
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Setup Chrome browser
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: latest
+
+      - name: Install ChromeDriver
+        uses: nanasess/setup-chromedriver@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore service account credentials
+        run: |
+          echo "$DD_CREDENTIALS_JSON" > credentials.json
+        env:
+          DD_CREDENTIALS_JSON: ${{ secrets.DD_CREDENTIALS_JSON }}
+
+      - name: Run scraper
+        env:
+          DD_LOGIN_EMAIL: ${{ secrets.DD_LOGIN_EMAIL }}
+          DD_LOGIN_PASS: ${{ secrets.DD_LOGIN_PASS }}
+          DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
+          COOKIE_FILE: ${{ secrets.COOKIE_FILE }}
+        run: python Scraper.py
