@@ -3,11 +3,12 @@ name: Run Scraper
 on:
   workflow_dispatch:
     inputs:
-      cookie-file:
-        description: 'Optional cookie file path override'
+      run_type:
+        description: 'Choose a label for this run (appears in workflow summary).'
         required: false
-      sheet-id:
-        description: 'Optional Google Sheet ID to override secret'
+        default: 'scheduled'
+      comment:
+        description: 'Optional note explaining why the workflow was triggered.'
         required: false
   schedule:
     - cron: '*/30 * * * *'
@@ -51,11 +52,4 @@ jobs:
           DD_LOGIN_PASS: ${{ secrets.DD_LOGIN_PASS }}
           DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
           COOKIE_FILE: ${{ secrets.COOKIE_FILE }}
-        run: |
-          if [ -n "${{ github.event.inputs.cookie-file }}" ]; then
-            export COOKIE_FILE="${{ github.event.inputs.cookie-file }}"
-          fi
-          if [ -n "${{ github.event.inputs.sheet-id }}" ]; then
-            export DD_SHEET_ID="${{ github.event.inputs.sheet-id }}"
-          fi
-          python Scraper.py
+        run: python Scraper.py
