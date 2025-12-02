@@ -943,7 +943,7 @@ def main():
                 post_count = int(profile_data.get('POSTS', '0'))
                 if post_count == 0:
                     log_msg(f"  ⚠️ No posts available")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Skipped")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Skipped 💀")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, "No posts")
                     failed_count += 1
                     continue
@@ -952,7 +952,7 @@ def main():
                 post_url = find_first_open_post(driver, nickname)
                 if not post_url:
                     log_msg(f"  ❌ No open posts found")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed ❎")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, "No open posts")
                     failed_count += 1
                     continue
