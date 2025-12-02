@@ -38,15 +38,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Setup Chrome browser
+      - name: Setup Chrome and ChromeDriver
         uses: browser-actions/setup-chrome@v1
         with:
-          chrome-version: latest
+          chrome-version: stable
 
-      - name: Install ChromeDriver
-        uses: nanasess/setup-chromedriver@master
-        with:
-          chromedriver-version: latest
+      - name: Add ChromeDriver to PATH
+        run: |
+          echo "CHROMEDRIVER_PATH=$(which chromedriver)" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
