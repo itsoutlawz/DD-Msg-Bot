@@ -952,7 +952,7 @@ def main():
                 post_count = int(profile_data.get('POSTS', '0'))
                 if post_count == 0:
                     log_msg(f"  ⚠️ No posts available")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Skipped")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Skipped 💀")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, "No posts")
                     failed_count += 1
                     continue
@@ -961,7 +961,7 @@ def main():
                 post_url = find_first_open_post(driver, nickname)
                 if not post_url:
                     log_msg(f"  ❌ No open posts found")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed ❎")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, "No open posts")
                     failed_count += 1
                     continue
@@ -983,19 +983,19 @@ def main():
                 # Update RunList based on result
                 if "Posted" in result['status']:
                     log_msg(f"  ✅ SUCCESS!")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Done 👀")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Done ✅")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, f"Posted @ {get_pkt_time().strftime('%I:%M %p')}")
                     update_cell_with_retry(runlist_sheet, runlist_row, 5, cleaned_link)  # Column E: Post Link
                     success_count += 1
                 elif "verification" in result['status'].lower():
                     log_msg(f"  ⚠️ Needs manual verification")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Done 👀")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Follow 💥")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}")
                     update_cell_with_retry(runlist_sheet, runlist_row, 5, cleaned_link)  # Column E: Post Link
                     success_count += 1
                 else:
                     log_msg(f"  ❌ FAILED: {result['status']}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed ❎")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, result['status'])
                     failed_count += 1
                 
