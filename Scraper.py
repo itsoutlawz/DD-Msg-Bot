@@ -4,6 +4,7 @@ Complete merged file (Cookies-first → fallback login)
 Author: OutLawz (NadeeM)
 """
 
+import sys
 import os
 import re
 import time
