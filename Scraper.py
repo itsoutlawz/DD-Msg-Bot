@@ -1,5 +1,5 @@
 """
-DamaDam Bot - Message Sender v2.0.021
+DamaDam Bot - Message Sender v2.2 (Fixed)
 Flow: Run → Pick Nick → Scrape Profile → Go to Posts → Pick Post → 
       Post Msg → Send with CSRF → Refresh & Verify → Update Sheet → Next Nick
 """
@@ -256,21 +256,15 @@ def load_cookies(driver):
         return False
 
 def login(driver) -> bool:
-    """Login to DamaDam - Enforces cookie-based authentication"""
+    """Login to DamaDam"""
     try:
         driver.get(HOME_URL)
         time.sleep(2)
         
-        # Try to load cookies first
         if load_cookies(driver):
             if 'login' not in driver.current_url.lower():
                 log_msg("✅ Already logged in via cookies")
                 return True
-        
-        # If no valid cookies, require them to be set up
-        log_msg("⚠️ No valid cookies found. Please authenticate manually and save cookies.")
-        log_msg("💡 To set up cookies: Run the bot with valid credentials to generate cookies.pkl")
-        log_msg("📌 Alternatively, ensure COOKIE_FILE environment variable points to your saved cookies.")
         
         driver.get(LOGIN_URL)
         time.sleep(3)
@@ -293,7 +287,7 @@ def login(driver) -> bool:
             
             if 'login' not in driver.current_url.lower():
                 save_cookies(driver)
-                log_msg("✅ Login successful - Cookies saved for future use")
+                log_msg("✅ Login successful")
                 return True
             else:
                 log_msg("❌ Login failed")
@@ -375,15 +369,15 @@ def to_absolute_url(href: str) -> str:
 def extract_text_comment_url(href: str) -> str:
     match = re.search(r"/comments/text/(\d+)/", href or "")
     if match:
-        return to_absolute_url(f"/comments/text/{match.group(1)}/").rstrip("/").split("#")[0]
-    return to_absolute_url(href or "").split("#")[0]
+        return to_absolute_url(f"/comments/text/{match.group(1)}/").rstrip("/")
+    return to_absolute_url(href or "")
 
 
 def extract_image_comment_url(href: str) -> str:
     match = re.search(r"/comments/image/(\d+)/", href or "")
     if match:
-        return to_absolute_url(f"/comments/image/{match.group(1)}/").rstrip("/").split("#")[0]
-    return to_absolute_url(href or "").split("#")[0]
+        return to_absolute_url(f"/content/{match.group(1)}/g/")
+    return to_absolute_url(href or "")
 
 
 def parse_post_timestamp(text: str) -> str:
@@ -496,7 +490,7 @@ def load_tags_mapping(checklist_sheet):
 # PROFILE SCRAPING
 # ============================================================================
 
-def scrape_profile(driver, nickname: str, source: str = "Target") -> dict | None:
+def scrape_profile(driver, nickname: str) -> dict | None:
     """Scrape full profile details from user page"""
     url = f"{BASE_URL}/users/{nickname}/"
     try:
@@ -522,7 +516,7 @@ def scrape_profile(driver, nickname: str, source: str = "Target") -> dict | None
             "POSTS": "0",
             "PROFILE LINK": url.rstrip('/'),
             "INTRO": "",
-            "SOURCE": source,
+            "SOURCE": "Target",
             "DATETIME SCRAP": now.strftime("%d-%b-%y %I:%M %p")
         }
         
@@ -843,7 +837,7 @@ def write_profile_to_sheet(sheet, row_num, profile_data, tags_mapping=None):
 def main():
     """Main bot process"""
     print("\n" + "="*70)
-    print("🎯 DamaDam Message Bot v2.0.221")
+    print("🎯 DamaDam Message Bot v2.2 - Fixed Flow")
     print("="*70)
     
     # Check credentials
@@ -898,14 +892,12 @@ def main():
             if len(row) > 1:
                 nickname = row[0].strip() if len(row) > 0 else ""
                 status = row[1].strip() if len(row) > 1 else ""
-                source = row[3].strip() if len(row) > 3 else "Target"
                 message = row[5].strip() if len(row) > 5 else ""
                 
                 if nickname and status.lower() == "pending":
                     pending_targets.append({
                         'row': i + 1,
                         'nickname': nickname,
-                        'source': source,
                         'message': message
                     })
         
@@ -922,7 +914,6 @@ def main():
         
         for idx, target in enumerate(pending_targets, 1):
             nickname = target['nickname']
-            source = target['source']
             message = target['message']
             runlist_row = target['row']
             
@@ -932,7 +923,7 @@ def main():
             
             try:
                 # STEP 1: Scrape Profile
-                profile_data = scrape_profile(driver, nickname, source)
+                profile_data = scrape_profile(driver, nickname)
                 if not profile_data:
                     log_msg(f"  ❌ Failed to scrape profile")
                     update_cell_with_retry(runlist_sheet, runlist_row, 2, "Failed")
@@ -973,25 +964,20 @@ def main():
                 # Save to ProfilesData
                 write_profile_to_sheet(profiles_sheet, 2, profile_data, tags_mapping)
                 
-                # Clean the post link (remove fragment)
-                cleaned_link = result['link'].split("#")[0] if result['link'] else ""
-                
                 # Update message details
                 update_cell_with_retry(profiles_sheet, 2, 19, result['msg'])  # POST MSG
-                update_cell_with_retry(profiles_sheet, 2, 20, cleaned_link)  # POST LINK
+                update_cell_with_retry(profiles_sheet, 2, 20, result['link'])  # POST LINK
                 
                 # Update RunList based on result
                 if "Posted" in result['status']:
                     log_msg(f"  ✅ SUCCESS!")
                     update_cell_with_retry(runlist_sheet, runlist_row, 2, "Done ✅")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, f"Posted @ {get_pkt_time().strftime('%I:%M %p')}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 5, cleaned_link)  # Column E: Post Link
                     success_count += 1
                 elif "verification" in result['status'].lower():
                     log_msg(f"  ⚠️ Needs manual verification")
                     update_cell_with_retry(runlist_sheet, runlist_row, 2, "Follow 💥")
                     update_cell_with_retry(runlist_sheet, runlist_row, 3, f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 5, cleaned_link)  # Column E: Post Link
                     success_count += 1
                 else:
                     log_msg(f"  ❌ FAILED: {result['status']}")
