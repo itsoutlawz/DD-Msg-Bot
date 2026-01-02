@@ -25,8 +25,6 @@ from gspread.exceptions import WorksheetNotFound
 
 # Option-A refactor imports
 from browser import setup_browser as setup_browser_mod, login as login_mod
-from modes.inbox_mode import run_inbox_mode as run_inbox_mode_mod
-from modes.activity_mode import run_activity_mode as run_activity_mode_mod
 
 # ============================================================================
 # CONFIGURATION
@@ -64,11 +62,26 @@ def log_msg(m):
     print(f"[{get_pkt_time().strftime('%H:%M:%S')}] {m}")
     sys.stdout.flush()
 
-def get_sheet(sheet_name="MessageList"):
+def _ensure_credentials_file() -> bool:
+    if os.path.exists(CREDENTIALS_FILE):
+        return True
+    payload = os.environ.get("DD_CREDENTIALS_JSON", "").strip()
+    if not payload:
+        return False
+    try:
+        json.loads(payload)
+        with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
+            f.write(payload)
+        return os.path.exists(CREDENTIALS_FILE)
+    except Exception:
+        return False
+
+
+def get_sheet(sheet_name="MsgList"):
     """Connect to Google Sheet"""
-    if not os.path.exists(CREDENTIALS_FILE):
+    if not _ensure_credentials_file():
         log_msg(f"❌ {CREDENTIALS_FILE} not found!")
-        sys.exit(1)
+        return None
     
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
@@ -82,9 +95,9 @@ def get_sheet(sheet_name="MessageList"):
 
 def get_or_create_sheet(sheet_name):
     """Get or create a worksheet"""
-    if not os.path.exists(CREDENTIALS_FILE):
+    if not _ensure_credentials_file():
         log_msg(f"❌ {CREDENTIALS_FILE} not found!")
-        sys.exit(1)
+        return None
     
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
@@ -518,6 +531,110 @@ def apply_message_template(template: str, *, name: str = "", nickname: str = "",
     return rendered
 
 
+def find_first_open_post(driver, nickname: str) -> str:
+    """Find the first post that has a replies/comments link.
+
+    Uses the provided posts pagination pattern:
+    https://damadam.pk/profile/public/<nick>/?page=1..5
+    """
+    if not nickname:
+        return ""
+
+    for page in range(1, 6):
+        url = f"{BASE_URL}/profile/public/{nickname}/?page={page}"
+        try:
+            driver.get(url)
+            try:
+                WebDriverWait(driver, 6).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.bas-sh"))
+                )
+            except Exception:
+                continue
+
+            posts = driver.find_elements(By.CSS_SELECTOR, "article.bas-sh")
+            for post in posts:
+                try:
+                    a = post.find_element(
+                        By.CSS_SELECTOR,
+                        'a[href*="/comments/"] button[itemprop="discussionUrl"], a[href*="/comments/"] button.vt',
+                    )
+                    href = ""
+                    try:
+                        href = (a.find_element(By.XPATH, "ancestor::a[1]").get_attribute("href") or "").strip()
+                    except Exception:
+                        href = ""
+                    if href:
+                        return href
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    return ""
+
+
+def send_and_verify_message(driver, post_url: str, message: str) -> dict:
+    """Open a comments page and submit a reply.
+
+    Selectors provided:
+    - Reply Form: form[action="/direct-response/send/"]
+    - Textarea: textarea#id_direct_response OR textarea[name="direct_response"]
+    - Submit: form[action="/direct-response/send/"] button[type="submit"]
+    - Follow-to-reply marker: <mark> with text 'FOLLOW TO REPLY'
+    """
+    result = {"status": "", "msg": message or "", "link": post_url or ""}
+    if not post_url:
+        result["status"] = "Missing post URL"
+        return result
+
+    try:
+        driver.get(post_url)
+        time.sleep(2)
+
+        # Privacy / follow gate
+        try:
+            marks = driver.find_elements(By.CSS_SELECTOR, "mark")
+            for m in marks:
+                if "follow to reply" in (m.text or "").lower():
+                    result["status"] = "Follow to reply"
+                    return result
+        except Exception:
+            pass
+
+        forms = driver.find_elements(By.CSS_SELECTOR, 'form[action="/direct-response/send/"]')
+        if not forms:
+            result["status"] = "Comments off"
+            return result
+
+        form = forms[0]
+        textarea = None
+        try:
+            textarea = form.find_element(By.CSS_SELECTOR, "textarea#id_direct_response")
+        except Exception:
+            try:
+                textarea = form.find_element(By.CSS_SELECTOR, 'textarea[name="direct_response"]')
+            except Exception:
+                textarea = None
+
+        if not textarea:
+            result["status"] = "Reply box missing"
+            return result
+
+        textarea.clear()
+        textarea.send_keys(message or "")
+        time.sleep(0.5)
+
+        btn = form.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
+        btn.click()
+        time.sleep(2)
+
+        result["status"] = "Posted"
+        return result
+    except Exception as e:
+        result["status"] = f"Error: {str(e)[:60]}"
+        return result
+
+
 def write_message_list_csv_export(rows: list[dict], output_path: str) -> None:
     if not rows:
         return
@@ -532,7 +649,6 @@ def write_message_list_csv_export(rows: list[dict], output_path: str) -> None:
         "STATUS",
         "NOTES",
         "RESULT URL",
-        "DATE TIME DONE",
         "ROW",
     ]
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -556,46 +672,6 @@ def ensure_simple_sheet_headers(sheet, headers: list[str]) -> None:
         sheet.clear()
         insert_row_with_retry(sheet, headers, 1)
 
-def save_html_snapshot(prefix: str, html: str) -> str:
-    os.makedirs("exports", exist_ok=True)
-    filename = f"{prefix}_{get_pkt_time().strftime('%Y%m%d_%H%M%S')}.html"
-    path = os.path.join("exports", filename)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(html or "")
-    return path
-
-def run_inbox_mode(driver):
-    inbox_url = f"{BASE_URL}/inbox/"
-    driver.get(inbox_url)
-    time.sleep(3)
-    html = driver.page_source or ""
-    saved_path = save_html_snapshot("inbox", html)
-
-    inbox_sheet = get_or_create_sheet("Inbox")
-    ensure_simple_sheet_headers(inbox_sheet, ["DATETIME", "URL", "SAVED_FILE", "STATUS"])
-    insert_row_with_retry(
-        inbox_sheet,
-        [get_pkt_time().strftime("%d-%b-%y %I:%M %p"), inbox_url, saved_path, "Captured"],
-        2,
-    )
-    log_msg(f"📥 Inbox captured -> {saved_path}")
-
-def run_activity_mode(driver):
-    activity_url = f"{BASE_URL}/activity/"
-    driver.get(activity_url)
-    time.sleep(3)
-    html = driver.page_source or ""
-    saved_path = save_html_snapshot("activity", html)
-
-    activity_sheet = get_or_create_sheet("Activity")
-    ensure_simple_sheet_headers(activity_sheet, ["DATETIME", "URL", "SAVED_FILE", "STATUS"])
-    insert_row_with_retry(
-        activity_sheet,
-        [get_pkt_time().strftime("%d-%b-%y %I:%M %p"), activity_url, saved_path, "Captured"],
-        2,
-    )
-    log_msg(f"📌 Activity captured -> {saved_path}")
-
 # ============================================================================
 # MAIN PROCESS
 # ============================================================================
@@ -608,23 +684,14 @@ def run_msg_mode(driver):
     
     # CONNECT TO SHEETS
     log_msg("📊 Connecting to Google Sheets...")
-    runlist_sheet = get_sheet("MessageList")
-    profiles_sheet = get_or_create_sheet("ProfilesData")
-    checklist_sheet = get_or_create_sheet("CheckList")
+    runlist_sheet = get_sheet("MsgList")
+    profiles_sheet = get_sheet("Profiles")
+    if not runlist_sheet or not profiles_sheet:
+        log_msg("❌ Sheets not available")
+        return
     log_msg("✅ Sheets connected\n")
 
-    apply_sheet_formatting(runlist_sheet, profiles_sheet, checklist_sheet)
-    tags_mapping = load_tags_mapping(checklist_sheet)
-        
-    # Initialize ProfilesData headers if needed
-    if len(profiles_sheet.get_all_values()) <= 1:
-        headers = ["IMAGE", "NICK NAME", "TAGS", "LAST POST", "LAST POST TIME", "FRIEND", "CITY",
-                  "GENDER", "MARRIED", "AGE", "JOINED", "FOLLOWERS", "STATUS", "POSTS", 
-                  "PROFILE LINK", "INTRO", "SOURCE", "DATETIME SCRAP", "POST MSG", "POST LINK"]
-        profiles_sheet.insert_row(headers, 1)
-        log_msg("📄 ProfilesData headers created\n")
-
-    # Initialize MessageList headers if needed
+    # Initialize MsgList headers if needed
     if len(runlist_sheet.get_all_values()) <= 1:
         headers = [
             "MODE",
@@ -637,16 +704,32 @@ def run_msg_mode(driver):
             "STATUS",
             "NOTES",
             "RESULT URL",
-            "DATE TIME DONE",
         ]
         runlist_sheet.insert_row(headers, 1)
 
-    # Ensure CheckList headers are present
-    checklist_headers = ["List 1🎌", "List 2💓", "List 3🔖", "List 4🐱‍🏍"]
-    current = checklist_sheet.get_all_values()
-    if not current or not current[0] or any(not c.strip() for c in current[0][:len(checklist_headers)]):
-        checklist_sheet.clear()
-        insert_row_with_retry(checklist_sheet, checklist_headers, 1)
+    def _build_profiles_map():
+        # Match MsgList col C (nick/url) against Profiles col B (nick)
+        # Copy: City -> Profiles col D, Posts -> Profiles col L, Followers -> Profiles col I
+        try:
+            vals = profiles_sheet.get_all_values()
+        except Exception:
+            vals = []
+        m = {}
+        for r in vals[1:]:
+            nick = (r[1].strip() if len(r) > 1 else "")
+            if not nick:
+                continue
+            city_v = (r[3].strip() if len(r) > 3 else "")
+            followers_v = (r[8].strip() if len(r) > 8 else "")
+            posts_v = (r[11].strip() if len(r) > 11 else "")
+            m[nick.lower()] = {
+                "city": city_v,
+                "followers": followers_v,
+                "posts": posts_v,
+            }
+        return m
+
+    profiles_map = _build_profiles_map()
         
     # GET PENDING TARGETS
     runlist_rows = runlist_sheet.get_all_values()
@@ -672,7 +755,7 @@ def run_msg_mode(driver):
 
         if mode_upper == "NICK":
             nickname = nick_or_url
-            profile_url = f"{BASE_URL}/users/{nickname}/"
+            profile_url = f"{BASE_URL}/users/{nickname}"
         elif mode_upper == "URL":
             profile_url = nick_or_url
             nickname = extract_nickname_from_user_url(profile_url)
@@ -755,7 +838,6 @@ def run_msg_mode(driver):
                 "STATUS": "",
                 "NOTES": "",
                 "RESULT URL": "",
-                "DATE TIME DONE": "",
                 "ROW": runlist_row,
             }
 
@@ -765,10 +847,8 @@ def run_msg_mode(driver):
                     update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
                     update_cell_with_retry(runlist_sheet, runlist_row, 9, "Invalid MODE (use NICK or URL)")
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
                     export_record["STATUS"] = "Error"
                     export_record["NOTES"] = "Invalid MODE (use NICK or URL)"
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
                     failed_count += 1
                     export_rows.append(export_record)
                     continue
@@ -778,83 +858,68 @@ def run_msg_mode(driver):
                     update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
                     update_cell_with_retry(runlist_sheet, runlist_row, 9, "Invalid NICK/URL (nickname not found)")
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
                     export_record["STATUS"] = "Error"
                     export_record["NOTES"] = "Invalid NICK/URL (nickname not found)"
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
                     failed_count += 1
                     export_rows.append(export_record)
                     continue
 
-                # STEP 1: Scrape Profile
-                profile_data = scrape_profile(driver, nickname, profile_url=profile_url)
-                if not profile_data:
-                    log_msg(f"  ❌ Failed to scrape profile")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "Profile scrape failed")
+                # Fill CITY/POSTS/FOLLOWRS from Profiles sheet (match nick)
+                p = profiles_map.get((nickname or "").lower())
+                if p:
+                    city = p.get("city", city)
+                    posts = p.get("posts", posts)
+                    followers = p.get("followers", followers)
+                    update_cell_with_retry(runlist_sheet, runlist_row, 4, city)
+                    update_cell_with_retry(runlist_sheet, runlist_row, 5, posts)
+                    update_cell_with_retry(runlist_sheet, runlist_row, 6, followers)
+
+                # Check post count from sheet
+                try:
+                    post_count = int(str(posts or "0").strip() or "0")
+                except Exception:
+                    post_count = 0
+                if post_count == 0 and target.get('mode', '').upper() == 'NICK':
+                    log_msg(f"  ⚠️ No post (from sheet)")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "No post")
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
-                    export_record["STATUS"] = "Error"
-                    export_record["NOTES"] = "Profile scrape failed"
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
+                    export_record["STATUS"] = "Skipped"
+                    export_record["NOTES"] = "No post"
                     failed_count += 1
                     export_rows.append(export_record)
                     continue
 
-                # Check if suspended
-                if profile_data.get('STATUS') == 'Suspended':
-                    log_msg(f"  ⚠️ Account suspended")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "Account suspended")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
-                    export_record["STATUS"] = "Error"
-                    export_record["NOTES"] = "Account suspended"
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                # Check post count
-                post_count = int(profile_data.get('POSTS', '0'))
-                if post_count == 0:
-                    log_msg(f"  ⚠️ No posts available")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "No posts")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
-                    export_record["STATUS"] = "Error"
-                    export_record["NOTES"] = "No posts"
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                # STEP 2: Find Open Post
-                post_url = find_first_open_post(driver, nickname)
+                # STEP 1: Pick a post URL
+                if target.get('mode', '').upper() == 'URL':
+                    post_url = profile_url
+                else:
+                    post_url = find_first_open_post(driver, nickname)
                 if not post_url:
                     log_msg(f"  ❌ No open posts found")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "No open posts")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "No open post")
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
-                    export_record["STATUS"] = "Error"
-                    export_record["NOTES"] = "No open posts"
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
+                    export_record["STATUS"] = "Skipped"
+                    export_record["NOTES"] = "No open post"
                     failed_count += 1
                     export_rows.append(export_record)
                     continue
 
-                # STEP 3: Send Message & Verify
+                # Privacy condition
+                if "follow to reply" in (driver.page_source or "").lower():
+                    log_msg("  ⚠️ Follow to reply")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "Follow to reply")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
+                    export_record["STATUS"] = "Skipped"
+                    export_record["NOTES"] = "Follow to reply"
+                    failed_count += 1
+                    export_rows.append(export_record)
+                    continue
+
+                # STEP 2: Send Message & Verify
                 result = send_and_verify_message(driver, post_url, message)
-
-                # STEP 4: Update Sheets
-                # Save to ProfilesData
-                write_profile_to_sheet(profiles_sheet, 2, profile_data, tags_mapping)
-
-                # Update message details
-                update_cell_with_retry(profiles_sheet, 2, 19, result['msg'])  # POST MSG
-                update_cell_with_retry(profiles_sheet, 2, 20, result['link'])  # POST LINK
 
                 # Update RunList based on result
                 if "Posted" in result['status']:
@@ -862,33 +927,27 @@ def run_msg_mode(driver):
                     update_cell_with_retry(runlist_sheet, runlist_row, 8, "Done")
                     update_cell_with_retry(runlist_sheet, runlist_row, 9, f"Posted @ {get_pkt_time().strftime('%I:%M %p')}")
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, result.get('link', ''))
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
                     export_record["STATUS"] = "Done"
                     export_record["NOTES"] = f"Posted @ {get_pkt_time().strftime('%I:%M %p')}"
                     export_record["RESULT URL"] = result.get('link', '')
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
                     success_count += 1
                 elif "verification" in result['status'].lower():
                     log_msg(f"  ⚠️ Needs manual verification")
                     update_cell_with_retry(runlist_sheet, runlist_row, 8, "Done")
                     update_cell_with_retry(runlist_sheet, runlist_row, 9, f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}")
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, result.get('link', ''))
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
                     export_record["STATUS"] = "Done"
                     export_record["NOTES"] = f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}"
                     export_record["RESULT URL"] = result.get('link', '')
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
                     success_count += 1
                 else:
                     log_msg(f"  ❌ FAILED: {result['status']}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
+                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
                     update_cell_with_retry(runlist_sheet, runlist_row, 9, result['status'])
                     update_cell_with_retry(runlist_sheet, runlist_row, 10, result.get('link', ''))
-                    update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
-                    export_record["STATUS"] = "Error"
+                    export_record["STATUS"] = "Skipped"
                     export_record["NOTES"] = result['status']
                     export_record["RESULT URL"] = result.get('link', '')
-                    export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
                     failed_count += 1
 
                 export_rows.append(export_record)
@@ -900,10 +959,8 @@ def run_msg_mode(driver):
                 update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
                 update_cell_with_retry(runlist_sheet, runlist_row, 9, error_msg)
                 update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                update_cell_with_retry(runlist_sheet, runlist_row, 11, get_pkt_time().strftime("%d-%b-%y %I:%M %p"))
                 export_record["STATUS"] = "Error"
                 export_record["NOTES"] = error_msg
-                export_record["DATE TIME DONE"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
                 failed_count += 1
                 export_rows.append(export_record)
     except KeyboardInterrupt:
@@ -925,7 +982,7 @@ def main():
     parser.add_argument(
         "--mode",
         default=None,
-        help="Run mode: msg | inbox | activity (overrides DD_MODE env)",
+        help="Run mode: msg (overrides DD_MODE env)",
     )
     args, _unknown = parser.parse_known_args()
 
@@ -935,10 +992,13 @@ def main():
     print(f"🎯 DamaDam Message Bot v{VERSION} - Mode: {effective_mode.title()}")
     print("="*70)
 
-    if not os.path.exists(CREDENTIALS_FILE):
-        log_msg(f"❌ {CREDENTIALS_FILE} not found!")
-        log_msg(f"💡 Please create {CREDENTIALS_FILE} with your Google credentials")
-        return
+    # Allow DD_CREDENTIALS_JSON fallback (GitHub Actions) to create credentials.json
+    if (not os.path.exists(CREDENTIALS_FILE)) and os.environ.get("DD_CREDENTIALS_JSON"):
+        try:
+            with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
+                f.write(os.environ.get("DD_CREDENTIALS_JSON", ""))
+        except Exception:
+            pass
 
     driver = setup_browser_mod()
     if not driver:
@@ -952,14 +1012,10 @@ def main():
             return
 
         mode = effective_mode
-        if mode == "msg":
-            run_msg_mode(driver)
-        elif mode == "inbox":
-            run_inbox_mode_mod(driver)
-        elif mode in {"activity", "activityy"}:
-            run_activity_mode_mod(driver)
-        else:
-            log_msg(f"❌ Unknown mode: {effective_mode} (use msg/inbox/activity)")
+        if mode != "msg":
+            log_msg("❌ Only Msg mode is supported in this build")
+            return
+        run_msg_mode(driver)
     finally:
         driver.quit()
         log_msg("🔒 Browser closed")

@@ -14,7 +14,7 @@ Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profi
 - Google Sheets integration with retry logic and formatting helpers.
 - **Cookie-based authentication** - Enforces secure login via saved cookies.
 - MessageList runner with MODE support (NICK / URL).
-- 3 bot modes via `DD_MODE`: `Msg`, `Inbox`, `Activity`.
+- Msg-only bot mode (`Msg`).
 - Message variables: `{name}`, `{city}`, `{nick}`, `{posts}`, `{followers}`.
 - Local CSV export saved under `folderExport/` (append-only).
 - GitHub Actions scheduled to run every 6 hours.
@@ -61,21 +61,13 @@ Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profi
    python Scraper.py
    ```
 
-## Running modes
+## Running
 
-You can choose a mode via CLI (overrides `DD_MODE`):
+Msg mode:
 
 ```bash
 python Scraper.py --mode msg
-python Scraper.py --mode inbox
-python Scraper.py --mode activity
 ```
-
-Notes:
-
-- Inbox (Replies) runs against: `https://damadam.pk/inbox/`
-- Activity runs against: `https://damadam.pk/inbox/activity/`
-- Pages require login/cookies.
 
 ## GitHub Actions
 
@@ -98,7 +90,7 @@ The workflow at `.github/workflows/scraper.yml`:
 
 ## Google Sheet structure
 
-Create a tab named `MessageList` with these headers (row 1):
+Create a tab named `MsgList` with these headers (row 1):
 
 1. `MODE`
 2. `NAME`
@@ -110,13 +102,19 @@ Create a tab named `MessageList` with these headers (row 1):
 8. `STATUS`
 9. `NOTES`
 10. `RESULT URL`
-11. `DATE TIME DONE`
 
 Only rows with `STATUS` = `Pending` are processed.
 
+The script also reads a tab named `Profiles` to auto-fill MsgList columns:
+
+- Match `MsgList` column `NICK/URL` (col C) with `Profiles` column B (nick)
+- City: `Profiles` col D → `MsgList` col D
+- Posts: `Profiles` col L → `MsgList` col E
+- Followers: `Profiles` col I → `MsgList` col F
+
 ### MODE behavior
 
-- `MODE = NICK` → column `NICK/URL` is treated as nickname and converted to `https://damadam.pk/users/<nick>/`.
+- `MODE = NICK` → column `NICK/URL` is treated as nickname and converted to `https://damadam.pk/users/<nick>`.
 - `MODE = URL` → column `NICK/URL` is treated as a full URL and opened as-is.
 
 ### Message variables
@@ -133,8 +131,6 @@ In `MESSAGE` you can use:
 
 - Persistent CSV exports (append-only):
   - `folderExport/msg.csv`
-  - `folderExport/inbox.csv`
-  - `folderExport/activity.csv`
 
 ## Credits
 
