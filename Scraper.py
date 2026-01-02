@@ -501,10 +501,15 @@ def apply_message_template(template: str, *, name: str = "", nickname: str = "",
     rendered = str(template)
     replacements = {
         "{name}": name or "",
+        "{{name}}": name or "",
         "{nick}": nickname or "",
+        "{{nick}}": nickname or "",
         "{city}": city or "",
+        "{{city}}": city or "",
         "{posts}": posts or "",
+        "{{posts}}": posts or "",
         "{followers}": followers or "",
+        "{{followers}}": followers or "",
     }
     for k, v in replacements.items():
         rendered = rendered.replace(k, v)

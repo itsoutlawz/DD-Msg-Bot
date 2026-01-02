@@ -3,6 +3,7 @@ import time
 import pickle
 
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -23,7 +24,11 @@ def setup_browser():
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--disable-gpu")
-        driver = webdriver.Chrome(options=opts)
+        service = None
+        local_driver = os.path.join(os.getcwd(), "chromedriver.exe")
+        if os.path.exists(local_driver):
+            service = Service(executable_path=local_driver)
+        driver = webdriver.Chrome(service=service, options=opts) if service else webdriver.Chrome(options=opts)
         driver.set_page_load_timeout(30)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         return driver

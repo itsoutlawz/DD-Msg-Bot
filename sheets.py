@@ -1,5 +1,6 @@
 import os
 import time
+import json
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -54,8 +55,18 @@ CHECKLIST_COLUMN_SPECS = {
 
 def get_client():
     if not os.path.exists(CREDENTIALS_FILE):
-        log_msg(f"❌ {CREDENTIALS_FILE} not found!")
-        raise FileNotFoundError(CREDENTIALS_FILE)
+        # GitHub Actions / env-secret fallback
+        payload = os.environ.get("DD_CREDENTIALS_JSON", "").strip()
+        if payload:
+            try:
+                # Validate JSON before writing
+                json.loads(payload)
+                with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
+                    f.write(payload)
+            except Exception:
+                raise FileNotFoundError(CREDENTIALS_FILE)
+        if not os.path.exists(CREDENTIALS_FILE):
+            raise FileNotFoundError(CREDENTIALS_FILE)
     if not DD_SHEET_ID:
         raise ValueError("DD_SHEET_ID is empty")
 
