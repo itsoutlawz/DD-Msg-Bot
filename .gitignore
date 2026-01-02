@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.pdb
+*.egg-info/
+.venv/
+venv/
+
+# Local env / secrets
+.env
+credentials.json
+
+# Runtime artifacts
+exports/
+folderExport/
+damadam_cookies.pkl
+*.pkl
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

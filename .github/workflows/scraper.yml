@@ -3,8 +3,13 @@ name: Run Scraper
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode to run: Msg | Inbox | Activity"
+        required: false
+        default: "Msg"
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: "0 */12 * * *"
 
 concurrency:
   group: run-scraper
@@ -20,7 +25,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Setup Chrome and ChromeDriver
         uses: browser-actions/setup-chrome@v1
@@ -50,4 +55,5 @@ jobs:
           DD_LOGIN_PASS: ${{ secrets.DD_LOGIN_PASS }}
           DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
           COOKIE_FILE: ${{ secrets.COOKIE_FILE }}
+          DD_MODE: ${{ github.event.inputs.mode || 'Msg' }}
         run: python Scraper.py

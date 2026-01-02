@@ -1,6 +1,8 @@
-# DamaDam Message Bot (v2.0.221)
+# DamaDam Message Bot (v2.3.0)
 
 [![Run Scraper](https://github.com/itsoutlawz/DD-Msg-Bot/actions/workflows/scraper.yml/badge.svg)](https://github.com/itsoutlawz/DD-Msg-Bot/actions/workflows/scraper.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Version](https://img.shields.io/badge/version-2.3.0-blue)
 
 Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profiles, posts tailored replies, and records activity in Google Sheets.
 
@@ -11,9 +13,13 @@ Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profi
 - Headless Selenium workflow tuned for damadam.
 - Google Sheets integration with retry logic and formatting helpers.
 - **Cookie-based authentication** - Enforces secure login via saved cookies.
-- 🔁 GitHub Actions scheduled to run every 2 hours.
-- 🎛️ Manual run options with configurable profile count (10/50/100) and batch size.
-- Dynamic SOURCE field mapping from RunList.
+- MessageList runner with MODE support (NICK / URL).
+- 3 bot modes via `DD_MODE`: `Msg`, `Inbox`, `Activity`.
+- Message variables: `{name}`, `{city}`, `{nick}`, `{posts}`, `{followers}`.
+- Local CSV export saved under `folderExport/` (append-only).
+- GitHub Actions scheduled to run every 6 hours.
+- Manual run options with configurable profile count (10/50/100) and batch size.
+- Dynamic SOURCE field mapping.
 - Automatic URL cleaning for posted message links.
 
 ## Requirements
@@ -37,13 +43,14 @@ Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profi
    pip install -r requirements.txt
    ```
 
-4. Set the environment variables exported in your shell:
+4. Set the environment variables (or fill `.env` locally):
 
    ```bash
    export DD_LOGIN_EMAIL=your_nick
    export DD_LOGIN_PASS=your_password
    export DD_SHEET_ID=your_sheet_id
    export COOKIE_FILE=damadam_cookies.pkl   # optional override
+   export SHEET_FONT=Asimovian              # optional
    ```
 
 5. **Initial Setup - Generate Cookies:**
@@ -54,21 +61,27 @@ Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profi
    python Scraper.py
    ```
 
-   This creates `damadam_cookies.pkl` for cookie-based authentication.
+## Running modes
 
-6. **Subsequent Runs:**
+You can choose a mode via CLI (overrides `DD_MODE`):
 
-   The bot will use saved cookies to authenticate automatically:
+```bash
+python Scraper.py --mode msg
+python Scraper.py --mode inbox
+python Scraper.py --mode activity
+```
 
-   ```bash
-   python Scraper.py
-   ```
+Notes:
+
+- Inbox (Replies) runs against: `https://damadam.pk/inbox/`
+- Activity runs against: `https://damadam.pk/inbox/activity/`
+- Pages require login/cookies.
 
 ## GitHub Actions
 
 The workflow at `.github/workflows/scraper.yml`:
 
-1. **Scheduled runs:** Executes automatically every 2 hours (`0 */2 * * *`).
+1. **Scheduled runs:** Executes automatically every 6 hours (`0 */6 * * *`).
 2. **Manual runs:** Trigger via `workflow_dispatch` with options:
    - **profiles_count:** Choose how many profiles to scrape (1=10, 2=50, 3=100)
    - **batch_size:** Set batch processing size (default: 5)
@@ -82,6 +95,51 @@ The workflow at `.github/workflows/scraper.yml`:
 
 - Never store the service account JSON in the repository. Use `DD_CREDENTIALS_JSON` to deliver it securely.
 - If you need to override the cookie path, add a `COOKIE_FILE` secret (matching the env variable name).
+
+## Google Sheet structure
+
+Create a tab named `MessageList` with these headers (row 1):
+
+1. `MODE`
+2. `NAME`
+3. `NICK/URL`
+4. `CITY`
+5. `POSTS`
+6. `FOLLOWRS`
+7. `MESSAGE`
+8. `STATUS`
+9. `NOTES`
+10. `RESULT URL`
+11. `DATE TIME DONE`
+
+Only rows with `STATUS` = `Pending` are processed.
+
+### MODE behavior
+
+- `MODE = NICK` → column `NICK/URL` is treated as nickname and converted to `https://damadam.pk/users/<nick>/`.
+- `MODE = URL` → column `NICK/URL` is treated as a full URL and opened as-is.
+
+### Message variables
+
+In `MESSAGE` you can use:
+
+- `{name}`
+- `{city}`
+- `{nick}`
+- `{posts}`
+- `{followers}`
+
+## Output files
+
+- Persistent CSV exports (append-only):
+  - `folderExport/msg.csv`
+  - `folderExport/inbox.csv`
+  - `folderExport/activity.csv`
+
+## Credits
+
+- **Owner/Credit:** Nadeem
+- **Assistance:** GPT-5.2
 
 ## About DamaDam
 
