@@ -1,25 +1,61 @@
 import time
 import os
+import re
+from urllib.parse import urlparse, parse_qs
 
 from config import BASE_URL
 from utils import get_pkt_time, log_msg, append_csv_row
 from sheets import get_or_create_sheet, ensure_simple_sheet_headers, insert_row_with_retry
 
 
-def _find_next_url(driver):
-    # Pagination selector wasn't provided; use a conservative heuristic.
-    candidates = driver.find_elements(
-        "xpath",
-        "//a[contains(.,'Next') or contains(.,'NEXT') or .//button[contains(.,'Next') or contains(.,'NEXT')]]",
-    )
-    for a in candidates:
+def _current_page_from_url(url: str) -> int:
+    if not url:
+        return 1
+    try:
+        q = parse_qs(urlparse(url).query)
+        v = (q.get("page") or [""])[0]
+        return int(v) if str(v).isdigit() else 1
+    except Exception:
+        return 1
+
+
+def _abs_url(href: str) -> str:
+    if not href:
+        return ""
+    h = href.strip()
+    if h.startswith("http://") or h.startswith("https://"):
+        return h
+    if h.startswith("/"):
+        return f"{BASE_URL}{h}"
+    return ""
+
+
+def _find_next_url(driver, current_url: str) -> str:
+    # Provided pagination selector: a[href*="?page="]
+    cur_page = _current_page_from_url(current_url)
+    links = driver.find_elements("css selector", 'a[href*="?page="]')
+
+    best_page = None
+    best_href = ""
+    for a in links:
         try:
             href = (a.get_attribute("href") or "").strip()
-            if href and href.startswith("http"):
-                return href
+            abs_href = _abs_url(href)
+            if not abs_href:
+                continue
+            m = re.search(r"[?&]page=(\d+)", abs_href)
+            if not m:
+                continue
+            p = int(m.group(1))
+            if p <= cur_page:
+                continue
+            if best_page is None or p < best_page:
+                best_page = p
+                best_href = abs_href
         except Exception:
             continue
-    return ""
+
+    return best_href
 
 
 def _run_inbox_like(driver, *, page_url: str, sheet_name: str, section: str, export_filename: str):
@@ -81,7 +117,15 @@ def _run_inbox_like(driver, *, page_url: str, sheet_name: str, section: str, exp
         seen_pages.add(current_url)
 
         items = driver.find_elements("css selector", 'div.mbl.mtl[style*="border:2px solid"]')
-        log_msg(f"📥 {section} items found: {len(items)}")
+        page_label = ""
+        try:
+            page_label = (driver.find_element("css selector", "h1 span.cs").text or "").strip()
+        except Exception:
+            page_label = ""
+        if page_label:
+            log_msg(f"📥 {section} {page_label} items found: {len(items)}")
+        else:
+            log_msg(f"📥 {section} items found: {len(items)}")
 
         now_str = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
 
@@ -168,7 +212,7 @@ def _run_inbox_like(driver, *, page_url: str, sheet_name: str, section: str, exp
             insert_row_with_retry(inbox_sheet, [row.get(h, "") for h in headers], 2)
             append_csv_row(export_path, headers, row)
 
-        next_url = _find_next_url(driver)
+        next_url = _find_next_url(driver, current_url)
         if not next_url:
             break
         current_url = next_url
