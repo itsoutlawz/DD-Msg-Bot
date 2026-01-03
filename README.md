@@ -1,153 +1,120 @@
-# DamaDam Message Bot (v2.3.0)
+# DD-Msg-Bot v2.2 - Clean Structure
 
-[![Run Scraper](https://github.com/itsoutlawz/DD-Msg-Bot/actions/workflows/scraper.yml/badge.svg)](https://github.com/itsoutlawz/DD-Msg-Bot/actions/workflows/scraper.yml)
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![Version](https://img.shields.io/badge/version-2.3.0-blue)
-
-Automation that logs into [damadam.pk](https://damadam.pk), scrapes target profiles, posts tailored replies, and records activity in Google Sheets.
-
-**Default Social Handler:** [@net2nadeem](https://damadam.pk/users/0utLawZ/) | **Email:** [net2outlawzz@gmail.com](mailto:net2outlawzz@gmail.com)
+DamaDam Message Bot with automated profile scraping and message sending capabilities.
 
 ## Features
 
-- Headless Selenium workflow tuned for damadam.
-- Google Sheets integration with retry logic and formatting helpers.
-- **Cookie-based authentication** - Enforces secure login via saved cookies.
-- MessageList runner with MODE support (NICK / URL).
-- Msg-only bot mode (`Msg`).
-- Message variables: `{name}`, `{city}`, `{nick}`, `{posts}`, `{followers}`.
-- Local CSV export saved under `folderExport/` (append-only).
-- GitHub Actions scheduled to run every 6 hours.
-- Manual run options with configurable profile count (10/50/100) and batch size.
-- Dynamic SOURCE field mapping.
-- Automatic URL cleaning for posted message links.
+- **Auto-Create Sheets**: Automatically creates MsgList sheet with proper structure
+- **MODE Support**: Supports both `nick` and `url` modes
+- **Template Messages**: Dynamic message templates with `{{city}}`, `{{posts}}`, `{{followers}}` placeholders
+- **Thread Safety**: Built-in locks for safe concurrent operations
+- **Single Sheet Design**: Uses only MsgList sheet for simplicity
+- **Success URL Tracking**: Automatically logs successful post URLs
 
-## Requirements
+## Sheet Structure
 
-- Python 3.11+
-- Chrome/Chromium + matching `chromedriver`
-- Google service account with Sheets access
-- GitHub repository with the following secrets:
-  - `DD_LOGIN_EMAIL`
-  - `DD_LOGIN_PASS`
-  - `DD_SHEET_ID` (target spreadsheet ID)
-  - `DD_CREDENTIALS_JSON` (full JSON payload of the Google service account credentials)
+### MsgList Sheet
 
-## Local setup
+| Column        | Description              | Example          |
+|---------------|-------------------------|------------------|
+| MODE          | `nick` or `url`        | nick             |
+| NAME          | Display name            | Test User 1      |
+| NICK/URL      | Nickname or direct URL  | Afshan_Qureshi   |
+| CITY          | City (auto-populated)  | Karachi          |
+| POSTS         | Post count (auto-populated) | 218       |
+| FOLLOWERS     | Followers count (auto-populated) | 150    |
+| MESSAGE       | Template message        | Hi {{name}} from {{city}}! |
+| STATUS        | Status (auto-updated)  | Done/Failed      |
+| NOTES         | Additional notes        | Manual check needed |
+| RESULT URL    | Success URL (auto-populated) | https://... |
 
-1. Create or download a Google service account JSON (read-only Sheets permissions).
-2. Save a copy as `credentials.json` in the repo root (or set `CREDENTIALS_FILE` via env).
-3. Install dependencies:
+## Message Templates
+
+Use placeholders in your message column:
+
+- `{{city}}` - User's city
+- `{{posts}}` - User's post count  
+- `{{followers}}` - User's followers count
+
+Example: `Hi {{name}} from {{city}}! You have {{posts}} posts.`
+
+## Setup
+
+1. **Google Sheets API**
+   - Enable Google Sheets API
+   - Create service account
+   - Download `credentials.json`
+
+2. **Environment Variables**
+
+   ```bash
+   DD_LOGIN_EMAIL=your_username
+   DD_LOGIN_PASS=your_password
+   DD_SHEET_ID=your_sheet_id
+   ```
+
+3. **Install Dependencies**
 
    ```bash
    pip install -r requirements.txt
    ```
 
-4. Set the environment variables (or fill `.env` locally):
-
-   ```bash
-   export DD_LOGIN_EMAIL=your_nick
-   export DD_LOGIN_PASS=your_password
-   export DD_SHEET_ID=your_sheet_id
-   export COOKIE_FILE=damadam_cookies.pkl   # optional override
-   export SHEET_FONT=Asimovian              # optional
-   ```
-
-5. **Initial Setup - Generate Cookies:**
-
-   First run will authenticate and save cookies for future use:
-
-   ```bash
-   python Scraper.py
-   ```
-
-## Running
-
-Msg mode:
+## Usage
 
 ```bash
-python Scraper.py --mode msg
+python Scraper.py
 ```
 
-## GitHub Actions
+The bot will:
 
-The workflow at `.github/workflows/scraper.yml`:
+1. Connect to Google Sheets
+2. Process all "pending" targets in MsgList
+3. Update status and result URLs automatically
+4. Handle both nickname and URL modes
 
-1. **Scheduled runs:** Executes automatically every 6 hours (`0 */6 * * *`).
-2. **Manual runs:** Trigger via `workflow_dispatch` with options:
-   - **profiles_count:** Choose how many profiles to scrape (1=10, 2=50, 3=100)
-   - **batch_size:** Set batch processing size (default: 5)
-   - **comment:** Optional note for the run
-3. Checks out the repo, installs Python, Chrome, and dependencies.
-4. Writes the service account JSON from `DD_CREDENTIALS_JSON` secret into `credentials.json`.
-5. Exports the required secrets (`DD_LOGIN_EMAIL`, `DD_LOGIN_PASS`, `DD_SHEET_ID`, optional `COOKIE_FILE`).
-6. Executes `python Scraper.py` inside the runner with saved cookies.
+## Modes
 
-### Secrets management tips
+### Nick Mode (MODE=nick)
 
-- Never store the service account JSON in the repository. Use `DD_CREDENTIALS_JSON` to deliver it securely.
-- If you need to override the cookie path, add a `COOKIE_FILE` secret (matching the env variable name).
+- Scrapes user profile first
+- Validates account status
+- Finds open posts automatically
+- Processes template with scraped data
 
-## Google Sheet structure
+### URL Mode (MODE=url)
 
-Create a tab named `MsgList` with these headers (row 1):
+- Uses direct URL without scraping
+- Processes template with provided data
+- Faster for direct post targeting
 
-1. `MODE`
-2. `NAME`
-3. `NICK/URL`
-4. `CITY`
-5. `POSTS`
-6. `FOLLOWRS`
-7. `MESSAGE`
-8. `STATUS`
-9. `NOTES`
-10. `RESULT URL`
+## Safety Features
 
-Only rows with `STATUS` = `Pending` are processed.
+- **Thread Locks**: Prevents concurrent sheet access issues
+- **Error Handling**: Comprehensive error recovery
+- **Verification**: Double-checks message posting
+- **Session Management**: Automatic cookie handling
 
-The script also reads a tab named `Profiles` to auto-fill MsgList columns:
+## Output
 
-- Match `MsgList` column `NICK/URL` (col C) with `Profiles` column B (nick)
-- City: `Profiles` col D → `MsgList` col D
-- Posts: `Profiles` col L → `MsgList` col E
-- Followers: `Profiles` col I → `MsgList` col F
+- ✅ **Success**: Message posted and verified
+- ⚠️ **Manual Check**: Message sent, needs manual verification  
+- ❌ **Failed**: Error occurred during processing
 
-### MODE behavior
+All results include success URLs for easy verification.
 
-- `MODE = NICK` → column `NICK/URL` is treated as nickname and converted to `https://damadam.pk/users/<nick>`.
-- `MODE = URL` → column `NICK/URL` is treated as a full URL and opened as-is.
+## Clean Structure
 
-### Message variables
+- Single `Scraper.py` file
+- No unnecessary dependencies
+- Clear separation of concerns
+- Production-ready code
 
-In `MESSAGE` you can use:
+## Version
 
-- `{name}`
-- `{city}`
-- `{nick}`
-- `{posts}`
-- `{followers}`
+v2.2 - Clean Structure Release
 
-## Output files
-
-- Persistent CSV exports (append-only):
-  - `folderExport/msg.csv`
-
-## Credits
-
-- **Owner/Credit:** Nadeem
-- **Assistance:** GPT-5.2
-
-## About DamaDam
-
-**DamaDam** is a Pakistani social networking platform for connecting with people, sharing content, and building communities.
-
-- **Website:** [damadam.pk](https://damadam.pk)
-- **Bot Handler Profile:** [0utLawZ](https://damadam.pk/users/0utLawZ/)
-- **Handler Avatar:** [Profile Image](https://d3h48bfc4uelnv.cloudfront.net/avatar-imgs/922b1ef8-afc2-45b4-ae7e-46b50d202fd0.jpg)
-
-## Troubleshooting
-
-- Monitor workflow logs for Selenium/Chrome/Sheets errors.
-- Ensure the service account has at least editor access to the spreadsheet.
-- Manual verification statuses are logged inside the sheet to guide follow-ups.
-- If cookies expire, the bot will re-authenticate and save new cookies automatically.
+- Auto-create sheet functionality
+- MODE support (nick/URL)
+- Template message processing
+- Thread safety implementation
+- Single MsgList sheet design

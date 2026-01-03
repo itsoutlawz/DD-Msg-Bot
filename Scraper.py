@@ -10,8 +10,7 @@ import os
 import sys
 import re
 import pickle
-import csv
-import argparse
+import threading
 from datetime import datetime, timedelta, timezone
 import gspread
 from google.oauth2.service_account import Credentials
@@ -23,20 +22,21 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException
 from gspread.exceptions import WorksheetNotFound
 
-# Option-A refactor imports
-from browser import setup_browser as setup_browser_mod, login as login_mod
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-VERSION = "2.3.0"
+VERSION = "2.2"
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
+# Thread safety lock
+sheet_lock = threading.Lock()
 
 LOGIN_EMAIL = os.environ.get("DD_LOGIN_EMAIL", "0utLawZ")
 LOGIN_PASS = os.environ.get("DD_LOGIN_PASS", "asdasd")
@@ -46,8 +46,6 @@ BASE_URL = "https://damadam.pk"
 COOKIE_FILE = os.environ.get("COOKIE_FILE", "damadam_cookies.pkl")
 SHEET_ID = os.environ.get("DD_SHEET_ID", "1xph0dra5-wPcgMXKubQD7A2CokObpst7o2rWbDA10t8")
 CREDENTIALS_FILE = os.environ.get("CREDENTIALS_FILE", "credentials.json")
-SHEET_FONT = os.environ.get("SHEET_FONT", "Asimovian")
-DD_MODE = os.environ.get("DD_MODE", "Msg")
 
 # ============================================================================
 # HELPERS
@@ -62,52 +60,54 @@ def log_msg(m):
     print(f"[{get_pkt_time().strftime('%H:%M:%S')}] {m}")
     sys.stdout.flush()
 
-def _ensure_credentials_file() -> bool:
-    if os.path.exists(CREDENTIALS_FILE):
-        return True
-    payload = os.environ.get("DD_CREDENTIALS_JSON", "").strip()
-    if not payload:
-        return False
-    try:
-        json.loads(payload)
-        with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
-            f.write(payload)
-        return os.path.exists(CREDENTIALS_FILE)
-    except Exception:
-        return False
+def process_template_message(message: str, profile_data: dict) -> str:
+    """Process template message with profile data placeholders"""
+    if not message:
+        return ""
+    
+    # Extract profile data
+    city = clean_text(profile_data.get('CITY', 'Unknown'))
+    posts = profile_data.get('POSTS', '0')
+    followers = profile_data.get('FOLLOWERS', '0')
+    
+    # Replace placeholders
+    processed = message.replace('{{city}}', city)
+    processed = processed.replace('{{posts}}', posts)
+    processed = processed.replace('{{followers}}', followers)
+    
+    return processed
 
-
-def get_sheet(sheet_name="MsgList"):
-    """Connect to Google Sheet"""
-    if not _ensure_credentials_file():
+def get_or_create_msglist_sheet():
+    """Get or create MsgList sheet with proper structure"""
+    if not os.path.exists(CREDENTIALS_FILE):
         log_msg(f"❌ {CREDENTIALS_FILE} not found!")
-        return None
+        sys.exit(1)
     
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
     client = gspread.authorize(creds)
     workbook = client.open_by_key(SHEET_ID)
-    try:
-        return workbook.worksheet(sheet_name)
-    except WorksheetNotFound:
-        log_msg(f"⚠️ Sheet '{sheet_name}' not found, using first sheet")
-        return workbook.sheet1
-
-def get_or_create_sheet(sheet_name):
-    """Get or create a worksheet"""
-    if not _ensure_credentials_file():
-        log_msg(f"❌ {CREDENTIALS_FILE} not found!")
-        return None
     
-    scope = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
-    client = gspread.authorize(creds)
-    workbook = client.open_by_key(SHEET_ID)
     try:
-        return workbook.worksheet(sheet_name)
+        sheet = workbook.worksheet("MsgList")
+        # Check if headers exist and are correct
+        existing_headers = sheet.row_values(1)
+        expected_headers = ["MODE", "NAME", "NICK/URL", "CITY", "POSTS", "FOLLOWERS", "MESSAGE", "STATUS", "NOTES", "RESULT URL"]
+        
+        if existing_headers != expected_headers:
+            log_msg("📄 Updating MsgList headers...")
+            sheet.clear()
+            sheet.insert_row(expected_headers, 1)
+            log_msg("✅ MsgList headers updated")
+        return sheet
     except WorksheetNotFound:
-        log_msg(f"📄 Creating new sheet: {sheet_name}")
-        return workbook.add_worksheet(title=sheet_name, rows=1000, cols=26)
+        log_msg("📄 Creating new MsgList sheet...")
+        sheet = workbook.add_worksheet(title="MsgList", rows=1000, cols=10)
+        headers = ["MODE", "NAME", "NICK/URL", "CITY", "POSTS", "FOLLOWERS", "MESSAGE", "STATUS", "NOTES", "RESULT URL"]
+        sheet.insert_row(headers, 1)
+        log_msg("✅ MsgList sheet created")
+        return sheet
+
 
 ALIGN_MAP = {"L": "LEFT", "C": "CENTER", "R": "RIGHT"}
 WRAP_MAP = {"WRAP": "WRAP", "CLIP": "CLIP", "OVERFLOW": "OVERFLOW"}
@@ -119,9 +119,9 @@ PROFILES_COLUMN_SPECS = {
 }
 
 RUNLIST_COLUMN_SPECS = {
-    "widths": [80, 120, 260, 120, 80, 80, 320, 100, 260, 260, 160],
-    "alignments": ["C", "L", "L", "L", "C", "C", "L", "C", "L", "L", "C"],
-    "wrap": ["CLIP"] * 11
+    "widths": [200, 140, 200, 100, 100, 300],
+    "alignments": ["L", "C", "L", "C", "C", "L"],
+    "wrap": ["CLIP"] * 6
 }
 
 CHECKLIST_COLUMN_SPECS = {
@@ -129,6 +129,7 @@ CHECKLIST_COLUMN_SPECS = {
     "alignments": ["L", "L", "L", "L"],
     "wrap": ["CLIP"] * 4
 }
+
 
 def index_to_column_letter(index: int) -> str:
     """Convert zero-based column index to letter"""
@@ -140,11 +141,12 @@ def index_to_column_letter(index: int) -> str:
         index //= 26
     return result
 
+
 def apply_column_styles(sheet, specs):
     max_idx = len(specs["widths"]) - 1
     last_letter = index_to_column_letter(max_idx)
-    body_text = {"fontFamily": SHEET_FONT, "fontSize": 9, "bold": False}
-    header_text = {"fontFamily": SHEET_FONT, "fontSize": 10, "bold": False}
+    body_text = {"fontFamily": "Asimovian", "fontSize": 9, "bold": False}
+    header_text = {"fontFamily": "Asimovian", "fontSize": 10, "bold": False}
 
     try:
         sheet.format(f"A1:{last_letter}1", {
@@ -177,6 +179,7 @@ def apply_column_styles(sheet, specs):
     except Exception:
         pass
 
+
 def retry_gspread_call(action, *args, retries=4, delay=1, **kwargs):
     last_exc = None
     for attempt in range(1, retries + 1):
@@ -192,22 +195,27 @@ def retry_gspread_call(action, *args, retries=4, delay=1, **kwargs):
     if last_exc:
         raise last_exc
 
+
 def batch_update_with_retry(sheet, body):
     return retry_gspread_call(sheet.spreadsheet.batch_update, body)
+
 
 def insert_row_with_retry(sheet, values, index, **kwargs):
     params = {"value_input_option": "USER_ENTERED"}
     params.update(kwargs)
     return retry_gspread_call(sheet.insert_row, values, index, **params)
 
+
 def update_cell_with_retry(sheet, row, col, value, **kwargs):
     params = {}
     params.update(kwargs)
     return retry_gspread_call(sheet.update_cell, row, col, value, **params)
 
+
 def apply_alternating_banding(sheet, total_columns, start_row=1):
     # Color-based banding removed as per updated requirements.
     return
+
 
 def apply_sheet_formatting(runlist_sheet, profiles_sheet, checklist_sheet):
     """Format RunList, ProfilesData and CheckList as requested"""
@@ -225,6 +233,25 @@ def apply_sheet_formatting(runlist_sheet, profiles_sheet, checklist_sheet):
 # BROWSER & AUTHENTICATION
 # ============================================================================
 
+def _navigate_with_retry(driver, url: str, *, retries: int = 2, delay: float = 2.0) -> bool:
+    for attempt in range(1, retries + 1):
+        try:
+            driver.get(url)
+            return True
+        except (TimeoutException, WebDriverException) as exc:
+            log_msg(
+                f"⚠️ Navigation failed ({attempt}/{retries}) to {url}: {str(exc)[:80]}"
+            )
+            try:
+                driver.execute_script("window.stop();")
+            except Exception:
+                pass
+            if attempt == retries:
+                return False
+            time.sleep(delay * attempt)
+    return False
+
+
 def setup_browser():
     """Setup headless Chrome browser"""
     try:
@@ -237,8 +264,10 @@ def setup_browser():
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--disable-gpu")
+        opts.add_argument("--disable-software-rasterizer")
+        opts.page_load_strategy = "eager"
         driver = webdriver.Chrome(options=opts)
-        driver.set_page_load_timeout(30)
+        driver.set_page_load_timeout(45)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         return driver
     except Exception as e:
@@ -259,7 +288,8 @@ def load_cookies(driver):
     try:
         if not os.path.exists(COOKIE_FILE):
             return False
-        driver.get(HOME_URL)
+        if not _navigate_with_retry(driver, HOME_URL):
+            return False
         time.sleep(2)
         with open(COOKIE_FILE, 'rb') as f:
             cookies = pickle.load(f)
@@ -279,15 +309,22 @@ def load_cookies(driver):
 def login(driver) -> bool:
     """Login to DamaDam"""
     try:
-        driver.get(HOME_URL)
+        if not _navigate_with_retry(driver, HOME_URL):
+            return False
         time.sleep(2)
-        
+
         if load_cookies(driver):
-            if 'login' not in driver.current_url.lower():
+            # Simple verification: check if we're not on login/signup pages
+            current_url = driver.current_url.lower()
+            if 'login' not in current_url and 'signup' not in current_url:
                 log_msg("✅ Already logged in via cookies")
                 return True
-        
-        driver.get(LOGIN_URL)
+            else:
+                log_msg("⚠️ Cookies expired, need fresh login")
+
+        if not _navigate_with_retry(driver, LOGIN_URL):
+            log_msg("❌ Login page load failed")
+            return False
         time.sleep(3)
         
         try:
@@ -306,6 +343,7 @@ def login(driver) -> bool:
             btn.click()
             time.sleep(4)
             
+            # Simple verification: check if we're not on login page anymore
             if 'login' not in driver.current_url.lower():
                 save_cookies(driver)
                 log_msg("✅ Login successful")
@@ -347,6 +385,7 @@ def clean_text(v: str) -> str:
     }
     return "" if v in bad else re.sub(r"\s+", " ", v)
 
+
 def convert_relative_date_to_absolute(text: str) -> str:
     """Convert relative dates to absolute"""
     if not text:
@@ -373,6 +412,7 @@ def convert_relative_date_to_absolute(text: str) -> str:
         return dt.strftime("%d-%b-%y")
     return text
 
+
 def to_absolute_url(href: str) -> str:
     """Ensure href is converted to absolute URL"""
     if not href:
@@ -384,11 +424,13 @@ def to_absolute_url(href: str) -> str:
         return f"{BASE_URL}/{href}"
     return href
 
+
 def extract_text_comment_url(href: str) -> str:
     match = re.search(r"/comments/text/(\d+)/", href or "")
     if match:
         return to_absolute_url(f"/comments/text/{match.group(1)}/").rstrip("/")
     return to_absolute_url(href or "")
+
 
 def extract_image_comment_url(href: str) -> str:
     match = re.search(r"/comments/image/(\d+)/", href or "")
@@ -396,8 +438,10 @@ def extract_image_comment_url(href: str) -> str:
         return to_absolute_url(f"/content/{match.group(1)}/g/")
     return to_absolute_url(href or "")
 
+
 def parse_post_timestamp(text: str) -> str:
     return convert_relative_date_to_absolute(text)
+
 
 def get_friend_status(driver) -> str:
     try:
@@ -409,6 +453,7 @@ def get_friend_status(driver) -> str:
         return ""
     except Exception:
         return ""
+
 
 def scrape_recent_post(driver, nickname: str) -> dict:
     """Fetch the latest post link and timestamp for the nickname"""
@@ -464,6 +509,7 @@ def scrape_recent_post(driver, nickname: str) -> dict:
     except Exception:
         return {"LPOST": "", "LDATE-TIME": ""}
 
+
 def load_tags_mapping(checklist_sheet):
     """Build nickname to tags mapping from CheckList sheet"""
     mapping = {}
@@ -499,523 +545,604 @@ def load_tags_mapping(checklist_sheet):
     log_msg(f"🏷️ Loaded {len(mapping)} tags from CheckList")
     return mapping
 
-def extract_nickname_from_user_url(user_url: str) -> str:
-    if not user_url:
-        return ""
-    u = user_url.strip()
-    m = re.search(r"/users/([^/]+)/?", u)
-    if m:
-        return m.group(1)
-    return ""
+# ============================================================================
+# PROFILE SCRAPING
+# ============================================================================
 
-def apply_message_template(template: str, *, name: str = "", nickname: str = "", city: str = "", posts: str = "", followers: str = "") -> str:
-    if not template:
-        return ""
-    rendered = str(template)
-    replacements = {
-        "{name}": name or "",
-        "{{name}}": name or "",
-        "{nick}": nickname or "",
-        "{{nick}}": nickname or "",
-        "{city}": city or "",
-        "{{city}}": city or "",
-        "{posts}": posts or "",
-        "{{posts}}": posts or "",
-        "{followers}": followers or "",
-        "{{followers}}": followers or "",
-    }
-    for k, v in replacements.items():
-        rendered = rendered.replace(k, v)
-        rendered = rendered.replace(k.upper(), v)
-        rendered = rendered.replace(k.title(), v)
-    return rendered
-
-
-def find_first_open_post(driver, nickname: str) -> str:
-    """Find the first post that has a replies/comments link.
-
-    Uses the provided posts pagination pattern:
-    https://damadam.pk/profile/public/<nick>/?page=1..5
-    """
-    if not nickname:
-        return ""
-
-    for page in range(1, 6):
-        url = f"{BASE_URL}/profile/public/{nickname}/?page={page}"
-        try:
-            driver.get(url)
+def scrape_profile(driver, nickname: str) -> dict | None:
+    """Scrape full profile details from user page"""
+    url = f"{BASE_URL}/users/{nickname}/"
+    try:
+        log_msg(f"  🔍 Scraping profile: {nickname}")
+        driver.get(url)
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.cxl.clb.lsp")))
+        
+        now = get_pkt_time()
+        data = {
+            "IMAGE": "",
+            "NICK NAME": nickname,
+            "TAGS": "",
+            "LAST POST": "",
+            "LAST POST TIME": "",
+            "FRIEND": "",
+            "CITY": "",
+            "GENDER": "",
+            "MARRIED": "",
+            "AGE": "",
+            "JOINED": "",
+            "FOLLOWERS": "",
+            "STATUS": "Unknown",
+            "POSTS": "0",
+            "PROFILE LINK": url.rstrip('/'),
+            "INTRO": "",
+            "SOURCE": "Target",
+            "DATETIME SCRAP": now.strftime("%d-%b-%y %I:%M %p")
+        }
+        
+        page_source = driver.page_source
+        data['FRIEND'] = get_friend_status(driver)
+        
+        # Check status
+        if 'account suspended' in page_source.lower():
+            data['STATUS'] = "Suspended"
+            return data
+        elif 'background:tomato' in page_source.lower() or 'style="background:tomato"' in page_source.lower():
+            data['STATUS'] = "Unverified"
+        else:
             try:
-                WebDriverWait(driver, 6).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.bas-sh"))
-                )
-            except Exception:
-                continue
-
-            posts = driver.find_elements(By.CSS_SELECTOR, "article.bas-sh")
-            for post in posts:
-                try:
-                    a = post.find_element(
-                        By.CSS_SELECTOR,
-                        'a[href*="/comments/"] button[itemprop="discussionUrl"], a[href*="/comments/"] button.vt',
-                    )
-                    href = ""
-                    try:
-                        href = (a.find_element(By.XPATH, "ancestor::a[1]").get_attribute("href") or "").strip()
-                    except Exception:
-                        href = ""
-                    if href:
-                        return href
-                except Exception:
+                driver.find_element(By.CSS_SELECTOR, "div[style*='tomato']")
+                data['STATUS'] = "Unverified"
+            except:
+                data['STATUS'] = "Verified"
+        
+        # Get intro
+        for sel in ["span.cl.sp.lsp.nos", "span.cl", ".ow span.nos"]:
+            try:
+                intro = driver.find_element(By.CSS_SELECTOR, sel)
+                if intro.text.strip():
+                    data['INTRO'] = clean_text(intro.text)
+                    break
+            except:
+                pass
+        
+        # Get profile fields
+        fields = {'City:': 'CITY', 'Gender:': 'GENDER', 'Married:': 'MARRIED', 'Age:': 'AGE', 'Joined:': 'JOINED'}
+        for label, key in fields.items():
+            try:
+                elem = driver.find_element(By.XPATH, f"//b[contains(text(), '{label}')]/following-sibling::span[1]")
+                value = elem.text.strip()
+                if not value:
                     continue
-        except Exception:
-            continue
+                if key == 'JOINED':
+                    data[key] = convert_relative_date_to_absolute(value)
+                elif key == 'GENDER':
+                    low = value.lower()
+                    data[key] = "💃" if low == 'female' else "🕺" if low == 'male' else value
+                elif key == 'MARRIED':
+                    low = value.lower()
+                    if low in {'yes', 'married'}:
+                        data[key] = "💖"
+                    elif low in {'no', 'single', 'unmarried'}:
+                        data[key] = "💔"
+                    else:
+                        data[key] = value
+                else:
+                    data[key] = clean_text(value)
+            except:
+                continue
+        
+        # Get followers
+        for sel in ["span.cl.sp.clb", ".cl.sp.clb"]:
+            try:
+                followers = driver.find_element(By.CSS_SELECTOR, sel)
+                match = re.search(r'(\d+)', followers.text)
+                if match:
+                    data['FOLLOWERS'] = match.group(1)
+                    break
+            except:
+                pass
+        
+        # Get post count
+        for sel in ["a[href*='/profile/public/'] button div:first-child", "a[href*='/profile/public/'] button div"]:
+            try:
+                posts = driver.find_element(By.CSS_SELECTOR, sel)
+                match = re.search(r'(\d+)', posts.text)
+                if match:
+                    data['POSTS'] = match.group(1)
+                    break
+            except:
+                pass
+        
+        # Get avatar image
+        for sel in ["img[src*='avatar-imgs']", "img[src*='avatar']", "div[style*='whitesmoke'] img[src*='cloudfront.net']"]:
+            try:
+                img = driver.find_element(By.CSS_SELECTOR, sel)
+                src = img.get_attribute('src')
+                if src and ('avatar' in src or 'cloudfront.net' in src):
+                    data['IMAGE'] = src.replace('/thumbnail/', '/')
+                    break
+            except:
+                pass
+        
+        post_data = scrape_recent_post(driver, nickname)
+        if post_data.get('LPOST'):
+            data['LAST POST'] = post_data['LPOST']
+        if post_data.get('LDATE-TIME'):
+            data['LAST POST TIME'] = post_data['LDATE-TIME']
+        
+        log_msg(f"  ✅ Profile: {data['GENDER']}, {data['CITY']}, Posts: {data['POSTS']}")
+        return data
+    except TimeoutException:
+        log_msg(f"  ⚠️ Timeout scraping {nickname}")
+        return None
+    except Exception as e:
+        log_msg(f"  ❌ Error scraping {nickname}: {str(e)[:60]}")
+        return None
 
-    return ""
+# ============================================================================
+# POST FINDING & MESSAGE SENDING
+# ============================================================================
 
+def find_first_open_post(driver, nickname: str) -> str | None:
+    """Find first post with open comments"""
+    url = f"{BASE_URL}/profile/public/{nickname}/"
+    try:
+        log_msg(f"  📄 Opening posts page...")
+        driver.get(url)
+        time.sleep(3)
+        
+        # Find all posts
+        posts = driver.find_elements(By.CSS_SELECTOR, "article.mbl")
+        log_msg(f"  📊 Found {len(posts)} posts")
+        
+        for idx, post in enumerate(posts, 1):
+            try:
+                # Look for REPLIES button
+                reply_btn = post.find_element(By.XPATH, ".//a[button[@itemprop='discussionUrl']]")
+                post_link = reply_btn.get_attribute("href")
+                
+                if post_link:
+                    if not post_link.startswith('http'):
+                        post_link = f"{BASE_URL}{post_link}"
+                    log_msg(f"  ✓ Found open post #{idx}: {post_link}")
+                    return post_link
+            except:
+                continue
+        
+        log_msg(f"  ⚠️ No open posts found")
+        return None
+    except Exception as e:
+        log_msg(f"  ❌ Error finding posts: {str(e)[:60]}")
+        return None
 
 def send_and_verify_message(driver, post_url: str, message: str) -> dict:
-    """Open a comments page and submit a reply.
-
-    Selectors provided:
-    - Reply Form: form[action="/direct-response/send/"]
-    - Textarea: textarea#id_direct_response OR textarea[name="direct_response"]
-    - Submit: form[action="/direct-response/send/"] button[type="submit"]
-    - Follow-to-reply marker: <mark> with text 'FOLLOW TO REPLY'
-    """
-    result = {"status": "", "msg": message or "", "link": post_url or ""}
-    if not post_url:
-        result["status"] = "Missing post URL"
-        return result
-
+    """Send message to post and verify it was posted"""
     try:
+        log_msg(f"  📝 Opening post: {post_url}")
         driver.get(post_url)
-        time.sleep(2)
-
-        # Privacy / follow gate
+        time.sleep(3)
+        
+        # Check if we're on the right page
+        if "damadam.pk" not in driver.current_url.lower():
+            log_msg(f"  ⚠️ Redirected away from damadam.pk")
+            return {"status": "Redirected", "link": driver.current_url, "msg": ""}
+        
+        # Check for "FOLLOW TO REPLY"
+        page_source = driver.page_source
+        if "FOLLOW TO REPLY" in page_source.upper():
+            log_msg(f"  ⚠️ Need to follow user first")
+            return {"status": "Not Following", "link": post_url, "msg": ""}
+        
+        # Try to click reply buttons to reveal forms
         try:
-            marks = driver.find_elements(By.CSS_SELECTOR, "mark")
-            for m in marks:
-                if "follow to reply" in (m.text or "").lower():
-                    result["status"] = "Follow to reply"
-                    return result
-        except Exception:
+            # Look for reply/reaction buttons that might reveal comment forms
+            reply_buttons = driver.find_elements(By.CSS_SELECTOR, "button[itemprop='discussionUrl'], a[button[@itemprop='discussionUrl']], .reply-btn, [onclick*='reply'], [onclick*='comment']")
+            log_msg(f"  🔍 Found {len(reply_buttons)} reply buttons")
+            
+            for i, btn in enumerate(reply_buttons):
+                try:
+                    if btn.is_displayed() and btn.is_enabled():
+                        log_msg(f"  🖱️ Clicking reply button {i+1}")
+                        driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(1)
+                except:
+                    continue
+                    
+            # Also try looking for any buttons/links that might be reply-related
+            all_buttons = driver.find_elements(By.TAG_NAME, "button")
+            all_links = driver.find_elements(By.TAG_NAME, "a")
+            log_msg(f"  🔍 Page has {len(all_buttons)} buttons and {len(all_links)} links")
+            
+            # Look for any element with text containing 'reply', 'comment', 'respond'
+            interactive_elements = driver.find_elements(By.CSS_SELECTOR, "button, a, [onclick], [data-action]")
+            reply_related = []
+            for elem in interactive_elements:
+                try:
+                    text = elem.text.lower()
+                    onclick = elem.get_attribute("onclick") or ""
+                    if any(word in text for word in ['reply', 'comment', 'respond', 'jawab']) or any(word in onclick.lower() for word in ['reply', 'comment', 'respond']):
+                        reply_related.append(elem.text[:30])
+                except:
+                    continue
+            if reply_related:
+                log_msg(f"  🎯 Found reply-related elements: {reply_related[:5]}")
+        except:
             pass
-
-        forms = driver.find_elements(By.CSS_SELECTOR, 'form[action="/direct-response/send/"]')
-        if not forms:
-            result["status"] = "Comments off"
-            return result
-
-        form = forms[0]
-        textarea = None
+        
+        time.sleep(2)  # Wait for any dynamic forms to load
+        
+        # Find the main reply form
         try:
-            textarea = form.find_element(By.CSS_SELECTOR, "textarea#id_direct_response")
-        except Exception:
+            # Debug: Check what forms are available
+            all_forms = driver.find_elements(By.TAG_NAME, "form")
+            log_msg(f"  🔍 Found {len(all_forms)} total forms")
+            for i, form in enumerate(all_forms):
+                try:
+                    action = form.get_attribute("action") or "no-action"
+                    displayed = form.is_displayed()
+                    log_msg(f"     Form {i+1}: action='{action}', visible={displayed}")
+                except:
+                    log_msg(f"     Form {i+1}: error checking")
+            
+            # Look for form with action="/direct-response/send/"
+            # There might be multiple forms, find the visible one (not display:none)
+            forms = driver.find_elements(By.CSS_SELECTOR, "form[action*='direct-response/send']")
+            log_msg(f"  🔍 Found {len(forms)} direct-response forms")
+            
+            form = None
+            for i, f in enumerate(forms):
+                try:
+                    displayed = f.is_displayed()
+                    log_msg(f"     Direct form {i+1}: visible={displayed}")
+                except:
+                    log_msg(f"     Direct form {i+1}: error checking visibility")
+                    
+                # Skip hidden forms (template form has style="display:none")
+                if not f.is_displayed():
+                    continue
+                # Check if form has the main reply textarea
+                try:
+                    f.find_element(By.CSS_SELECTOR, "textarea[name='direct_response']")
+                    form = f
+                    break
+                except:
+                    continue
+            
+            if not form:
+                log_msg(f"  ❌ No visible reply form found")
+                return {"status": "Comments closed", "link": post_url, "msg": ""}
+            
+            # Get CSRF token
+            csrf_input = form.find_element(By.NAME, "csrfmiddlewaretoken")
+            csrf_token = csrf_input.get_attribute("value")
+            log_msg(f"  🔐 Got CSRF token: {csrf_token[:20]}...")
+            
+            # Get hidden fields
+            hidden_fields = {}
+            for hidden in form.find_elements(By.CSS_SELECTOR, "input[type='hidden']"):
+                name = hidden.get_attribute("name")
+                value = hidden.get_attribute("value")
+                if name and value:
+                    hidden_fields[name] = value
+            
+            log_msg(f"  📋 Hidden fields: {len(hidden_fields)} found")
+            
+            # Find textarea - try multiple selectors
+            textarea = None
+            textarea_selectors = [
+                "textarea[name='direct_response']",
+                "textarea#id_direct_response",
+                "textarea.inp"
+            ]
+            
+            for selector in textarea_selectors:
+                try:
+                    textarea = form.find_element(By.CSS_SELECTOR, selector)
+                    if textarea:
+                        break
+                except:
+                    continue
+            
+            if not textarea:
+                log_msg(f"  ❌ Textarea not found in form")
+                return {"status": "Textarea not found", "link": post_url, "msg": ""}
+            
+            # Clear and type message
+            textarea.clear()
+            time.sleep(0.5)
+            
+            # Limit message to 350 chars
+            if len(message) > 350:
+                message = message[:350]
+            
+            textarea.send_keys(message)
+            log_msg(f"  ✍️ Typed message: '{message}' ({len(message)} chars)")
+            time.sleep(1)
+            
+            # Find send button
+            send_btn = form.find_element(By.CSS_SELECTOR, "button[type='submit']")
+            
+            # Scroll to button
+            driver.execute_script("arguments[0].scrollIntoView(true);", send_btn)
+            time.sleep(0.5)
+            
+            # Click send
+            log_msg(f"  🚀 Clicking send button...")
             try:
-                textarea = form.find_element(By.CSS_SELECTOR, 'textarea[name="direct_response"]')
-            except Exception:
-                textarea = None
-
-        if not textarea:
-            result["status"] = "Reply box missing"
-            return result
-
-        textarea.clear()
-        textarea.send_keys(message or "")
-        time.sleep(0.5)
-
-        btn = form.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
-        btn.click()
-        time.sleep(2)
-
-        result["status"] = "Posted"
-        return result
+                send_btn.click()
+            except:
+                # Fallback to JavaScript click
+                driver.execute_script("arguments[0].click();", send_btn)
+            
+            log_msg(f"  ⏳ Waiting 3 seconds for post to process...")
+            time.sleep(3)
+            
+            # Refresh page to see new message
+            log_msg(f"  🔄 Refreshing page to verify...")
+            driver.get(post_url)
+            time.sleep(2)
+            
+            # Check if message appears
+            fresh_page = driver.page_source
+            
+            # Multiple verification methods
+            verifications = {
+                "username_href": f'href="/users/{LOGIN_EMAIL}/"' in fresh_page,
+                "username_bold": f'<b>{LOGIN_EMAIL}</b>' in fresh_page,
+                "message_in_bdi": f'<bdi>{message}</bdi>' in fresh_page,
+                "recent_time": any(x in fresh_page.lower() for x in ['sec ago', 'secs ago', 'seconds ago']),
+                "simple_username": LOGIN_EMAIL in fresh_page,
+                "simple_message": message in fresh_page
+            }
+            
+            log_msg(f"  🔍 Verification checks:")
+            for check_name, result in verifications.items():
+                log_msg(f"     {check_name}: {'✓' if result else '✗'}")
+            
+            # If any verification passes
+            if any(verifications.values()):
+                log_msg(f"  ✅ Message verified!")
+                log_msg(f"  🔗 Success URL: {post_url}")
+                return {"status": "✅ Posted", "link": post_url, "msg": message}
+            else:
+                log_msg(f"  ⚠️ Message sent but not verified")
+                return {"status": "⚠️ Pending verification", "link": post_url, "msg": message}
+                
+        except NoSuchElementException as e:
+            log_msg(f"  ❌ Form element not found: {str(e)[:60]}")
+            return {"status": "Form not found", "link": post_url, "msg": ""}
+            
     except Exception as e:
-        result["status"] = f"Error: {str(e)[:60]}"
-        return result
-
-
-def write_message_list_csv_export(rows: list[dict], output_path: str) -> None:
-    if not rows:
-        return
-    fieldnames = [
-        "MODE",
-        "NAME",
-        "NICK/URL",
-        "CITY",
-        "POSTS",
-        "FOLLOWRS",
-        "MESSAGE",
-        "STATUS",
-        "NOTES",
-        "RESULT URL",
-        "ROW",
-    ]
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    needs_header = (not os.path.exists(output_path)) or os.path.getsize(output_path) == 0
-    with open(output_path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        if needs_header:
-            w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-def ensure_simple_sheet_headers(sheet, headers: list[str]) -> None:
-    try:
-        existing = sheet.get_all_values()
-    except Exception:
-        existing = []
-    if not existing:
-        insert_row_with_retry(sheet, headers, 1)
-        return
-    if not existing[0] or len(existing[0]) < len(headers):
-        sheet.clear()
-        insert_row_with_retry(sheet, headers, 1)
+        log_msg(f"  ❌ Error: {str(e)[:100]}")
+        return {"status": f"Error: {str(e)[:30]}", "link": post_url, "msg": ""}
 
 # ============================================================================
 # MAIN PROCESS
 # ============================================================================
 
-def run_msg_mode(driver):
-    """Msg mode process"""
-    print("\n" + "="*70)
-    print(f"🎯 DamaDam Message Bot v{VERSION} - Fixed Flow")
-    print("="*70)
-    
-    # CONNECT TO SHEETS
-    log_msg("📊 Connecting to Google Sheets...")
-    runlist_sheet = get_sheet("MsgList")
-    profiles_sheet = get_sheet("Profiles")
-    if not runlist_sheet or not profiles_sheet:
-        log_msg("❌ Sheets not available")
-        return
-    log_msg("✅ Sheets connected\n")
+def write_profile_to_sheet(sheet, row_num, profile_data, tags_mapping=None):
+    """Write normalized profile data to ProfilesData sheet"""
+    tags_mapping = tags_mapping or {}
+    cleaned = dict(profile_data)
 
-    # Initialize MsgList headers if needed
-    if len(runlist_sheet.get_all_values()) <= 1:
-        headers = [
-            "MODE",
-            "NAME",
-            "NICK/URL",
-            "CITY",
-            "POSTS",
-            "FOLLOWRS",
-            "MESSAGE",
-            "STATUS",
-            "NOTES",
-            "RESULT URL",
-        ]
-        runlist_sheet.insert_row(headers, 1)
+    nickname = (cleaned.get("NICK NAME") or "").strip()
+    nickname_key = nickname.lower()
 
-    def _build_profiles_map():
-        # Match MsgList col C (nick/url) against Profiles col B (nick)
-        # Copy: City -> Profiles col D, Posts -> Profiles col L, Followers -> Profiles col I
-        try:
-            vals = profiles_sheet.get_all_values()
-        except Exception:
-            vals = []
-        m = {}
-        for r in vals[1:]:
-            nick = (r[1].strip() if len(r) > 1 else "")
-            if not nick:
-                continue
-            city_v = (r[3].strip() if len(r) > 3 else "")
-            followers_v = (r[8].strip() if len(r) > 8 else "")
-            posts_v = (r[11].strip() if len(r) > 11 else "")
-            m[nick.lower()] = {
-                "city": city_v,
-                "followers": followers_v,
-                "posts": posts_v,
-            }
-        return m
+    if not cleaned.get("DATETIME SCRAP"):
+        cleaned["DATETIME SCRAP"] = get_pkt_time().strftime("%d-%b-%y %I:%M %p")
 
-    profiles_map = _build_profiles_map()
-        
-    # GET PENDING TARGETS
-    runlist_rows = runlist_sheet.get_all_values()
-    pending_targets = []
+    if cleaned.get("LAST POST TIME"):
+        cleaned["LAST POST TIME"] = convert_relative_date_to_absolute(cleaned["LAST POST TIME"])
 
-    for i in range(1, len(runlist_rows)):
-        row = runlist_rows[i]
-        mode = row[0].strip() if len(row) > 0 else ""
-        name = row[1].strip() if len(row) > 1 else ""
-        nick_or_url = row[2].strip() if len(row) > 2 else ""
-        city = row[3].strip() if len(row) > 3 else ""
-        posts = row[4].strip() if len(row) > 4 else ""
-        followers = row[5].strip() if len(row) > 5 else ""
-        message_template = row[6].strip() if len(row) > 6 else ""
-        status = row[7].strip() if len(row) > 7 else ""
+    if nickname_key and not cleaned.get("TAGS") and nickname_key in tags_mapping:
+        cleaned["TAGS"] = tags_mapping[nickname_key]
 
-        if not status or status.lower() != "pending":
-            continue
+    columns = [
+        "IMAGE", "NICK NAME", "TAGS", "LAST POST", "LAST POST TIME", "FRIEND", "CITY",
+        "GENDER", "MARRIED", "AGE", "JOINED", "FOLLOWERS", "STATUS", "POSTS",
+        "PROFILE LINK", "INTRO", "SOURCE", "DATETIME SCRAP", "POST MSG", "POST LINK"
+    ]
 
-        mode_upper = mode.upper()
-        nickname = ""
-        profile_url = ""
+    raw_passthrough = {"IMAGE", "LAST POST", "PROFILE LINK", "POST LINK"}
 
-        if mode_upper == "NICK":
-            nickname = nick_or_url
-            profile_url = f"{BASE_URL}/users/{nickname}"
-        elif mode_upper == "URL":
-            profile_url = nick_or_url
-            nickname = extract_nickname_from_user_url(profile_url)
+    row_values = []
+    for col_name in columns:
+        value = cleaned.get(col_name, "")
+        if col_name in raw_passthrough:
+            row_values.append(value or "")
         else:
-            pending_targets.append({
-                'row': i + 1,
-                'mode': mode,
-                'nickname': "",
-                'profile_url': "",
-                'name': name,
-                'city': city,
-                'posts': posts,
-                'followers': followers,
-                'message_template': message_template,
-                'invalid_mode': True,
-            })
-            continue
+            row_values.append(clean_text(value))
 
-        pending_targets.append({
-            'row': i + 1,
-            'mode': mode_upper,
-            'nickname': nickname,
-            'profile_url': profile_url,
-            'name': name,
-            'city': city,
-            'posts': posts,
-            'followers': followers,
-            'message_template': message_template,
-            'invalid_mode': False,
-        })
-        
-    if not pending_targets:
-        log_msg("⚠️ No pending targets found")
-        return
-        
-    log_msg(f"📋 Found {len(pending_targets)} pending targets\n")
-    log_msg("="*70)
-        
-    # PROCESS EACH TARGET
-    success_count = 0
-    failed_count = 0
+    insert_row_with_retry(sheet, row_values, row_num)
 
-    export_rows: list[dict] = []
-    export_path = os.path.join(os.getcwd(), "folderExport", "msg.csv")
-        
-    try:
-        for idx, target in enumerate(pending_targets, 1):
-            if should_exit:
-                log_msg("🛑 Stop requested (Ctrl+C). Exiting after current completed targets...")
-                break
-
-            nickname = target.get('nickname', '')
-            profile_url = target.get('profile_url', '')
-            name = target.get('name', '')
-            city = target.get('city', '')
-            posts = target.get('posts', '')
-            followers = target.get('followers', '')
-            message = apply_message_template(
-                target.get('message_template', ''),
-                name=name,
-                nickname=nickname,
-                city=city,
-                posts=posts,
-                followers=followers,
-            )
-            runlist_row = target['row']
-                
-            print("\n" + "-"*70)
-            log_msg(f"[{idx}/{len(pending_targets)}] 👤 Processing: {nickname}")
-            print("-"*70)
-                
-            export_record = {
-                "MODE": target.get('mode', ''),
-                "NAME": name,
-                "NICK/URL": profile_url if (target.get('mode', '').upper() == 'URL') else nickname,
-                "CITY": city,
-                "POSTS": posts,
-                "FOLLOWRS": followers,
-                "MESSAGE": message,
-                "STATUS": "",
-                "NOTES": "",
-                "RESULT URL": "",
-                "ROW": runlist_row,
-            }
-
-            try:
-                if target.get('invalid_mode'):
-                    log_msg(f"  ❌ Invalid MODE: {target.get('mode', '')}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "Invalid MODE (use NICK or URL)")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    export_record["STATUS"] = "Error"
-                    export_record["NOTES"] = "Invalid MODE (use NICK or URL)"
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                if not nickname:
-                    log_msg(f"  ❌ Missing nickname")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "Invalid NICK/URL (nickname not found)")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    export_record["STATUS"] = "Error"
-                    export_record["NOTES"] = "Invalid NICK/URL (nickname not found)"
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                # Fill CITY/POSTS/FOLLOWRS from Profiles sheet (match nick)
-                p = profiles_map.get((nickname or "").lower())
-                if p:
-                    city = p.get("city", city)
-                    posts = p.get("posts", posts)
-                    followers = p.get("followers", followers)
-                    update_cell_with_retry(runlist_sheet, runlist_row, 4, city)
-                    update_cell_with_retry(runlist_sheet, runlist_row, 5, posts)
-                    update_cell_with_retry(runlist_sheet, runlist_row, 6, followers)
-
-                # Check post count from sheet
-                try:
-                    post_count = int(str(posts or "0").strip() or "0")
-                except Exception:
-                    post_count = 0
-                if post_count == 0 and target.get('mode', '').upper() == 'NICK':
-                    log_msg(f"  ⚠️ No post (from sheet)")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "No post")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    export_record["STATUS"] = "Skipped"
-                    export_record["NOTES"] = "No post"
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                # STEP 1: Pick a post URL
-                if target.get('mode', '').upper() == 'URL':
-                    post_url = profile_url
-                else:
-                    post_url = find_first_open_post(driver, nickname)
-                if not post_url:
-                    log_msg(f"  ❌ No open posts found")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "No open post")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    export_record["STATUS"] = "Skipped"
-                    export_record["NOTES"] = "No open post"
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                # Privacy condition
-                if "follow to reply" in (driver.page_source or "").lower():
-                    log_msg("  ⚠️ Follow to reply")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, "Follow to reply")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                    export_record["STATUS"] = "Skipped"
-                    export_record["NOTES"] = "Follow to reply"
-                    failed_count += 1
-                    export_rows.append(export_record)
-                    continue
-
-                # STEP 2: Send Message & Verify
-                result = send_and_verify_message(driver, post_url, message)
-
-                # Update RunList based on result
-                if "Posted" in result['status']:
-                    log_msg(f"  ✅ SUCCESS!")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Done")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, f"Posted @ {get_pkt_time().strftime('%I:%M %p')}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, result.get('link', ''))
-                    export_record["STATUS"] = "Done"
-                    export_record["NOTES"] = f"Posted @ {get_pkt_time().strftime('%I:%M %p')}"
-                    export_record["RESULT URL"] = result.get('link', '')
-                    success_count += 1
-                elif "verification" in result['status'].lower():
-                    log_msg(f"  ⚠️ Needs manual verification")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Done")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, result.get('link', ''))
-                    export_record["STATUS"] = "Done"
-                    export_record["NOTES"] = f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}"
-                    export_record["RESULT URL"] = result.get('link', '')
-                    success_count += 1
-                else:
-                    log_msg(f"  ❌ FAILED: {result['status']}")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 8, "Skipped")
-                    update_cell_with_retry(runlist_sheet, runlist_row, 9, result['status'])
-                    update_cell_with_retry(runlist_sheet, runlist_row, 10, result.get('link', ''))
-                    export_record["STATUS"] = "Skipped"
-                    export_record["NOTES"] = result['status']
-                    export_record["RESULT URL"] = result.get('link', '')
-                    failed_count += 1
-
-                export_rows.append(export_record)
-                time.sleep(2)
-
-            except Exception as e:
-                error_msg = f"Error: {str(e)[:40]}"
-                log_msg(f"  ❌ {error_msg}")
-                update_cell_with_retry(runlist_sheet, runlist_row, 8, "Error")
-                update_cell_with_retry(runlist_sheet, runlist_row, 9, error_msg)
-                update_cell_with_retry(runlist_sheet, runlist_row, 10, "")
-                export_record["STATUS"] = "Error"
-                export_record["NOTES"] = error_msg
-                failed_count += 1
-                export_rows.append(export_record)
-    except KeyboardInterrupt:
-        signal_handler(None, None)
-    finally:
-        write_message_list_csv_export(export_rows, export_path)
-        log_msg(f"📄 CSV export saved: {export_path}")
-    
-    # SUMMARY
-    print("\n" + "="*70)
-    log_msg("📊 RUN COMPLETE!")
-    log_msg(f"   ✅ Success: {success_count}/{len(pending_targets)}")
-    log_msg(f"   ❌ Failed: {failed_count}/{len(pending_targets)}")
-    print("="*70 + "\n")
-        
 def main():
     """Main bot process"""
-    parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument(
-        "--mode",
-        default=None,
-        help="Run mode: msg (overrides DD_MODE env)",
-    )
-    args, _unknown = parser.parse_known_args()
-
-    effective_mode = (args.mode or DD_MODE or "Msg").strip().lower()
-
     print("\n" + "="*70)
-    print(f"🎯 DamaDam Message Bot v{VERSION} - Mode: {effective_mode.title()}")
+    print(f" DamaDam Message Bot v{VERSION} - Fixed Flow")
     print("="*70)
+    log_msg("Press Ctrl+C to stop after the current profile finishes.")
 
-    # Allow DD_CREDENTIALS_JSON fallback (GitHub Actions) to create credentials.json
-    if (not os.path.exists(CREDENTIALS_FILE)) and os.environ.get("DD_CREDENTIALS_JSON"):
-        try:
-            with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
-                f.write(os.environ.get("DD_CREDENTIALS_JSON", ""))
-        except Exception:
-            pass
-
-    driver = setup_browser_mod()
+    # Check credentials
+    if not os.path.exists(CREDENTIALS_FILE):
+        log_msg(f" {CREDENTIALS_FILE} not found!")
+        log_msg(f" Please create {CREDENTIALS_FILE} with your Google credentials")
+        return
+    
+    driver = setup_browser()
     if not driver:
         log_msg("❌ Browser setup failed")
         return
-
+    
     try:
+        # LOGIN
         log_msg("🔐 Logging in...")
-        if not login_mod(driver):
+        if not login(driver):
             log_msg("❌ Login failed")
             return
-
-        mode = effective_mode
-        if mode != "msg":
-            log_msg("❌ Only Msg mode is supported in this build")
+        
+        # CONNECT TO SHEETS
+        log_msg("📊 Connecting to Google Sheets...")
+        msglist_sheet = get_or_create_msglist_sheet()
+        log_msg("✅ MsgList connected\n")
+        
+        # GET PENDING TARGETS
+        msglist_rows = msglist_sheet.get_all_values()
+        pending_targets = []
+        
+        for i in range(1, len(msglist_rows)):
+            row = msglist_rows[i]
+            if len(row) > 7:  # Ensure we have enough columns
+                mode = row[0].strip().lower() if len(row) > 0 else ""
+                name = row[1].strip() if len(row) > 1 else ""
+                nick_or_url = row[2].strip() if len(row) > 2 else ""
+                city = row[3].strip() if len(row) > 3 else ""
+                posts = row[4].strip() if len(row) > 4 else ""
+                followers = row[5].strip() if len(row) > 5 else ""
+                message = row[6].strip() if len(row) > 6 else ""
+                status = row[7].strip().lower() if len(row) > 7 else ""
+                
+                if nick_or_url and status == "pending":
+                    pending_targets.append({
+                        'row': i + 1,
+                        'mode': mode,
+                        'name': name,
+                        'nick_or_url': nick_or_url,
+                        'city': city,
+                        'posts': posts,
+                        'followers': followers,
+                        'message': message
+                    })
+        
+        if not pending_targets:
+            log_msg("⚠️ No pending targets found")
             return
-        run_msg_mode(driver)
+        
+        log_msg(f"📋 Found {len(pending_targets)} pending targets\n")
+        log_msg("="*70)
+        
+        # PROCESS EACH TARGET
+        success_count = 0
+        failed_count = 0
+        
+        for idx, target in enumerate(pending_targets, 1):
+            mode = target['mode']
+            name = target['name']
+            nick_or_url = target['nick_or_url']
+            city = target['city']
+            posts = target['posts']
+            followers = target['followers']
+            message = target['message']
+            msglist_row = target['row']
+            
+            print("\n" + "-"*70)
+            log_msg(f"[{idx}/{len(pending_targets)}] 👤 Processing: {name}")
+            print("-"*70)
+            
+            try:
+                post_url = None
+                profile_data = {}
+                
+                # STEP 1: Handle based on MODE
+                if mode == "url":
+                    # Direct URL mode - use the URL directly
+                    post_url = nick_or_url
+                    log_msg(f"  🌐 Using direct URL: {post_url}")
+                    # Create minimal profile data for template processing
+                    profile_data = {
+                        'CITY': city,
+                        'POSTS': posts,
+                        'FOLLOWERS': followers,
+                        'STATUS': 'URL Mode'
+                    }
+                else:
+                    # Nick mode - scrape profile first
+                    log_msg(f"  🔍 Scraping profile: {nick_or_url}")
+                    profile_data = scrape_profile(driver, nick_or_url)
+                    if not profile_data:
+                        log_msg(f"  ❌ Failed to scrape profile")
+                        with sheet_lock:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 8, "Failed")
+                            update_cell_with_retry(msglist_sheet, msglist_row, 9, "Profile scrape failed")
+                        failed_count += 1
+                        continue
+                    
+                    # Check if suspended
+                    if profile_data.get('STATUS') == 'Suspended':
+                        log_msg(f"  ⚠️ Account suspended")
+                        with sheet_lock:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 8, "Skipped")
+                            update_cell_with_retry(msglist_sheet, msglist_row, 9, "Account suspended")
+                        failed_count += 1
+                        continue
+                    
+                    # Check post count
+                    post_count = int(profile_data.get('POSTS', '0'))
+                    if post_count == 0:
+                        log_msg(f"  ⚠️ No posts available")
+                        with sheet_lock:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 8, "Skipped")
+                            update_cell_with_retry(msglist_sheet, msglist_row, 9, "No posts")
+                        failed_count += 1
+                        continue
+                    
+                    # STEP 2: Find Open Post
+                    post_url = find_first_open_post(driver, nick_or_url)
+                    if not post_url:
+                        log_msg(f"  ❌ No open posts found")
+                        with sheet_lock:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 8, "Failed")
+                            update_cell_with_retry(msglist_sheet, msglist_row, 9, "No open posts")
+                        failed_count += 1
+                        continue
+                
+                # STEP 3: Process template message
+                processed_message = process_template_message(message, profile_data)
+                log_msg(f"  💬 Processed message: '{processed_message}'")
+                
+                # STEP 4: Send Message & Verify
+                result = send_and_verify_message(driver, post_url, processed_message)
+                
+                # STEP 5: Update MsgList based on result
+                with sheet_lock:
+                    if "Posted" in result['status']:
+                        log_msg(f"  ✅ SUCCESS!")
+                        log_msg(f"  🔗 Success URL: {result['link']}")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 8, "Done")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 9, f"Posted @ {get_pkt_time().strftime('%I:%M %p')}")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 10, result['link'])  # RESULT URL
+                        success_count += 1
+                    elif "verification" in result['status'].lower():
+                        log_msg(f"  ⚠️ Needs manual verification")
+                        log_msg(f"  🔗 Check URL: {result['link']}")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 8, "Done")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 9, f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 10, result['link'])  # RESULT URL
+                        success_count += 1
+                    else:
+                        log_msg(f"  ❌ FAILED: {result['status']}")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 8, "Failed")
+                        update_cell_with_retry(msglist_sheet, msglist_row, 9, result['status'])
+                        if result['link']:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 10, result['link'])  # RESULT URL
+                        failed_count += 1
+                
+                time.sleep(2)
+                
+            except Exception as e:
+                error_msg = f"Error: {str(e)[:40]}"
+                log_msg(f"  ❌ {error_msg}")
+                with sheet_lock:
+                    update_cell_with_retry(msglist_sheet, msglist_row, 8, "Failed")
+                    update_cell_with_retry(msglist_sheet, msglist_row, 9, error_msg)
+                failed_count += 1
+        
+        # SUMMARY
+        print("\n" + "="*70)
+        log_msg("📊 RUN COMPLETE!")
+        log_msg(f"   ✅ Success: {success_count}/{len(pending_targets)}")
+        log_msg(f"   ❌ Failed: {failed_count}/{len(pending_targets)}")
+        print("="*70 + "\n")
+        
     finally:
         driver.quit()
         log_msg("🔒 Browser closed")

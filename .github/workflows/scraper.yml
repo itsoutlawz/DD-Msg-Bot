@@ -5,14 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Bot mode"
-        required: true
+        description: "Mode to run: Msg | Inbox | Activity"
+        required: false
         default: "Msg"
-        type: choice
-        options:
-          - "Msg"
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */12 * * *"
 
 concurrency:
   group: run-scraper
@@ -58,6 +55,5 @@ jobs:
           DD_LOGIN_PASS: ${{ secrets.DD_LOGIN_PASS }}
           DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
           COOKIE_FILE: ${{ secrets.COOKIE_FILE }}
-          DD_MODE: ${{ github.event.inputs.mode }}
-        run: |
-          python Scraper.py --mode msg
+          DD_MODE: ${{ github.event.inputs.mode || 'Msg' }}
+        run: python Scraper.py
