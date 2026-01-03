@@ -60,6 +60,20 @@ def log_msg(m):
     print(f"[{get_pkt_time().strftime('%H:%M:%S')}] {m}")
     sys.stdout.flush()
 
+def clean_url(url: str) -> str:
+    """Clean URL by removing reply fragments and trailing slashes"""
+    if not url:
+        return url
+    
+    # Remove /#/reply patterns (keep the post ID)
+    url = re.sub(r'/\d+/#reply$', '', url)
+    url = re.sub(r'/#reply$', '', url)
+    
+    # Remove trailing slash
+    url = url.rstrip('/')
+    
+    return url
+
 def process_template_message(message: str, profile_data: dict) -> str:
     """Process template message with profile data placeholders"""
     if not message:
@@ -1047,7 +1061,7 @@ def main():
                 # STEP 1: Handle based on MODE
                 if mode == "url":
                     # Direct URL mode - use the URL directly
-                    post_url = nick_or_url
+                    post_url = clean_url(nick_or_url)
                     log_msg(f"  🌐 Using direct URL: {post_url}")
                     # Create minimal profile data for template processing
                     profile_data = {
@@ -1108,24 +1122,27 @@ def main():
                 with sheet_lock:
                     if "Posted" in result['status']:
                         log_msg(f"  ✅ SUCCESS!")
-                        log_msg(f"  🔗 Success URL: {result['link']}")
+                        clean_result_url = clean_url(result['link'])
+                        log_msg(f"  🔗 Success URL: {clean_result_url}")
                         update_cell_with_retry(msglist_sheet, msglist_row, 8, "Done")
                         update_cell_with_retry(msglist_sheet, msglist_row, 9, f"Posted @ {get_pkt_time().strftime('%I:%M %p')}")
-                        update_cell_with_retry(msglist_sheet, msglist_row, 10, result['link'])  # RESULT URL
+                        update_cell_with_retry(msglist_sheet, msglist_row, 10, clean_result_url)  # RESULT URL
                         success_count += 1
                     elif "verification" in result['status'].lower():
                         log_msg(f"  ⚠️ Needs manual verification")
-                        log_msg(f"  🔗 Check URL: {result['link']}")
+                        clean_result_url = clean_url(result['link'])
+                        log_msg(f"  🔗 Check URL: {clean_result_url}")
                         update_cell_with_retry(msglist_sheet, msglist_row, 8, "Done")
                         update_cell_with_retry(msglist_sheet, msglist_row, 9, f"Check manually @ {get_pkt_time().strftime('%I:%M %p')}")
-                        update_cell_with_retry(msglist_sheet, msglist_row, 10, result['link'])  # RESULT URL
+                        update_cell_with_retry(msglist_sheet, msglist_row, 10, clean_result_url)  # RESULT URL
                         success_count += 1
                     else:
                         log_msg(f"  ❌ FAILED: {result['status']}")
                         update_cell_with_retry(msglist_sheet, msglist_row, 8, "Failed")
                         update_cell_with_retry(msglist_sheet, msglist_row, 9, result['status'])
                         if result['link']:
-                            update_cell_with_retry(msglist_sheet, msglist_row, 10, result['link'])  # RESULT URL
+                            clean_result_url = clean_url(result['link'])
+                            update_cell_with_retry(msglist_sheet, msglist_row, 10, clean_result_url)  # RESULT URL
                         failed_count += 1
                 
                 time.sleep(2)
