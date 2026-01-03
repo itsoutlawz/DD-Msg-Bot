@@ -93,6 +93,8 @@ def process_template_message(message: str, profile_data: dict) -> str:
     
     return processed
 
+# DO NOT MODIFY - Sheet structure and column mapping
+# Changing this will break data mapping and cause sheet update failures
 def get_or_create_msglist_sheet():
     """Get or create MsgList sheet with proper structure"""
     if not os.path.exists(CREDENTIALS_FILE):
@@ -322,6 +324,12 @@ def load_cookies(driver):
         log_msg(f"⚠️ Cookie load failed: {e}")
         return False
 
+# ============================================================================
+# CRITICAL FUNCTIONS - DO NOT MODIFY WITHOUT EXPLICIT APPROVAL
+# ============================================================================
+
+# DO NOT MODIFY - Core authentication logic
+# Changing this will break login/session management and cause bot to fail authentication
 def login(driver) -> bool:
     """Login to DamaDam"""
     try:
@@ -565,6 +573,8 @@ def load_tags_mapping(checklist_sheet):
 # PROFILE SCRAPING
 # ============================================================================
 
+# DO NOT MODIFY - Profile data extraction logic
+# Changing this will break template processing and data mapping, causing message failures
 def scrape_profile(driver, nickname: str) -> dict | None:
     """Scrape full profile details from user page"""
     url = f"{BASE_URL}/users/{nickname}/"
@@ -731,6 +741,8 @@ def find_first_open_post(driver, nickname: str) -> str | None:
         log_msg(f"  ❌ Error finding posts: {str(e)[:60]}")
         return None
 
+# DO NOT MODIFY - Core message sending and verification logic
+# Changing this will break the entire messaging system and cause posting failures
 def send_and_verify_message(driver, post_url: str, message: str) -> dict:
     """Send message to post and verify it was posted"""
     try:
@@ -971,6 +983,8 @@ def write_profile_to_sheet(sheet, row_num, profile_data, tags_mapping=None):
 
     insert_row_with_retry(sheet, row_values, row_num)
 
+# DO NOT MODIFY - Main orchestration and MODE logic
+# Changing this will break the entire bot flow and targeting system
 def main():
     """Main bot process"""
     print("\n" + "="*70)
