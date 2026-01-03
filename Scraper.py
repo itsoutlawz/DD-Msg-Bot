@@ -66,12 +66,14 @@ def process_template_message(message: str, profile_data: dict) -> str:
         return ""
     
     # Extract profile data
+    name = profile_data.get('NICK NAME', profile_data.get('NAME', 'Unknown'))
     city = clean_text(profile_data.get('CITY', 'Unknown'))
     posts = profile_data.get('POSTS', '0')
     followers = profile_data.get('FOLLOWERS', '0')
     
     # Replace placeholders
-    processed = message.replace('{{city}}', city)
+    processed = message.replace('{{name}}', name)
+    processed = processed.replace('{{city}}', city)
     processed = processed.replace('{{posts}}', posts)
     processed = processed.replace('{{followers}}', followers)
     
