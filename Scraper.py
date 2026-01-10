@@ -1,5 +1,5 @@
 """
-DamaDam Bot - Message Sender v2.2 (Fixed)
+DamaDam Bot - Message Sender v1.1 (Enhanced)
 Flow: Run → Pick Nick → Scrape Profile → Go to Posts → Pick Post → 
       Post Msg → Send with CSRF → Refresh & Verify → Update Sheet → Next Nick
 """
@@ -22,6 +22,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException
 from gspread.exceptions import WorksheetNotFound
 import subprocess
+from rich.console import Console
+from rich.progress import Progress
+
+console = Console()
 
 try:
     from dotenv import load_dotenv
@@ -34,7 +38,7 @@ except Exception:
 # CONFIGURATION
 # ============================================================================
 
-VERSION = "2.2"
+VERSION = "1.1"
 
 # Thread safety lock
 sheet_lock = threading.Lock()
@@ -58,8 +62,7 @@ def get_pkt_time():
 
 def log_msg(m):
     """Print timestamped message"""
-    print(f"[{get_pkt_time().strftime('%H:%M:%S')}] {m}")
-    sys.stdout.flush()
+    console.print(f"[{get_pkt_time().strftime('%H:%M:%S')}] {m}")
 
 def clean_url(url: str) -> str:
     """Clean URL by removing reply fragments and trailing slashes"""
@@ -274,17 +277,6 @@ def _navigate_with_retry(driver, url: str, *, retries: int = 2, delay: float = 2
 def setup_browser():
     """Setup headless Chrome browser"""
     try:
-        local_chromedriver = os.path.exists('chromedriver.exe')
-        local_credentials = os.path.exists('credentials.json')
-
-        if not local_chromedriver or not local_credentials:
-            # Use GitHub Actions Secrets (placeholder logic)
-            chromedriver_path = os.getenv('GITHUB_CHROMEDRIVER_PATH', 'chromedriver.exe')
-            credentials_path = os.getenv('GITHUB_CREDENTIALS_PATH', 'credentials.json')
-        else:
-            chromedriver_path = 'chromedriver.exe'
-            credentials_path = 'credentials.json'
-
         opts = Options()
         opts.add_argument("--headless=new")
         opts.add_argument("--window-size=1920,1080")
@@ -296,7 +288,7 @@ def setup_browser():
         opts.add_argument("--disable-gpu")
         opts.add_argument("--disable-software-rasterizer")
         opts.page_load_strategy = "eager"
-        driver = webdriver.Chrome(executable_path=chromedriver_path, options=opts)
+        driver = webdriver.Chrome(options=opts)
         driver.set_page_load_timeout(45)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         return driver
@@ -998,11 +990,10 @@ def write_profile_to_sheet(sheet, row_num, profile_data, tags_mapping=None):
 # Changing this will break the entire bot flow and targeting system
 def main():
     """Main bot process"""
-    print("\n" + "="*70)
-    print(f" DamaDam Message Bot v{VERSION} - Fixed Flow")
-    print("="*70)
-    log_msg("Press Ctrl+C to stop after the current profile finishes.")
-
+    console.print("\n" + "="*70)
+    console.print(f" [bold green]DamaDam Message Bot v{VERSION} - Enhanced[/bold green]")
+    console.print("="*70)
+    
     # Check credentials
     if not os.path.exists(CREDENTIALS_FILE):
         log_msg(f" {CREDENTIALS_FILE} not found!")
@@ -1016,13 +1007,13 @@ def main():
     
     try:
         # LOGIN
-        log_msg("🔐 Logging in...")
+        console.print("[blue]🔐 Logging in...[/blue]")
         if not login(driver):
             log_msg("❌ Login failed")
             return
         
         # CONNECT TO SHEETS
-        log_msg("📊 Connecting to Google Sheets...")
+        console.print("[blue]📊 Connecting to Google Sheets...[/blue]")
         msglist_sheet = get_or_create_msglist_sheet()
         log_msg("✅ MsgList connected\n")
         
@@ -1058,8 +1049,8 @@ def main():
             log_msg("⚠️ No pending targets found")
             return
         
-        log_msg(f"📋 Found {len(pending_targets)} pending targets\n")
-        log_msg("="*70)
+        console.print(f"[magenta]📋 Found {len(pending_targets)} pending targets[/magenta]\n")
+        console.print("="*70)
         
         # PROCESS EACH TARGET
         success_count = 0
@@ -1075,9 +1066,9 @@ def main():
             message = target['message']
             msglist_row = target['row']
             
-            print("\n" + "-"*70)
+            console.print("\n" + "-"*70)
             log_msg(f"[{idx}/{len(pending_targets)}] 👤 Processing: {name}")
-            print("-"*70)
+            console.print("-"*70)
             
             try:
                 post_url = None
@@ -1197,11 +1188,11 @@ def main():
                 failed_count += 1
         
         # SUMMARY
-        print("\n" + "="*70)
+        console.print("\n" + "="*70)
         log_msg("📊 RUN COMPLETE!")
         log_msg(f"   ✅ Success: {success_count}/{len(pending_targets)}")
         log_msg(f"   ❌ Failed: {failed_count}/{len(pending_targets)}")
-        print("="*70 + "\n")
+        console.print("="*70 + "\n")
         
         # Ensure GitHub connection and push changes
         subprocess.run(['git', 'add', '.'])
