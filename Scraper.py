@@ -21,6 +21,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException
 from gspread.exceptions import WorksheetNotFound
+import subprocess
 
 try:
     from dotenv import load_dotenv
@@ -273,6 +274,17 @@ def _navigate_with_retry(driver, url: str, *, retries: int = 2, delay: float = 2
 def setup_browser():
     """Setup headless Chrome browser"""
     try:
+        local_chromedriver = os.path.exists('chromedriver.exe')
+        local_credentials = os.path.exists('credentials.json')
+
+        if not local_chromedriver or not local_credentials:
+            # Use GitHub Actions Secrets (placeholder logic)
+            chromedriver_path = os.getenv('GITHUB_CHROMEDRIVER_PATH', 'chromedriver.exe')
+            credentials_path = os.getenv('GITHUB_CREDENTIALS_PATH', 'credentials.json')
+        else:
+            chromedriver_path = 'chromedriver.exe'
+            credentials_path = 'credentials.json'
+
         opts = Options()
         opts.add_argument("--headless=new")
         opts.add_argument("--window-size=1920,1080")
@@ -284,7 +296,7 @@ def setup_browser():
         opts.add_argument("--disable-gpu")
         opts.add_argument("--disable-software-rasterizer")
         opts.page_load_strategy = "eager"
-        driver = webdriver.Chrome(options=opts)
+        driver = webdriver.Chrome(executable_path=chromedriver_path, options=opts)
         driver.set_page_load_timeout(45)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         return driver
@@ -483,14 +495,12 @@ def scrape_recent_post(driver, nickname: str) -> dict:
     """Fetch the latest post link and timestamp for the nickname"""
     post_url = f"{BASE_URL}/profile/public/{nickname}"
     try:
+        log_msg(f"  🔍 Scraping profile: {nickname}")
         driver.get(post_url)
-        try:
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "article.mbl"))
-            )
-        except TimeoutException:
-            return {"LPOST": "", "LDATE-TIME": ""}
-
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "article.mbl"))
+        )
+        
         post_element = driver.find_element(By.CSS_SELECTOR, "article.mbl")
         post_data = {"LPOST": "", "LDATE-TIME": ""}
 
@@ -757,6 +767,7 @@ def send_and_verify_message(driver, post_url: str, message: str) -> dict:
         
         # Check for "FOLLOW TO REPLY"
         page_source = driver.page_source
+        
         if "FOLLOW TO REPLY" in page_source.upper():
             log_msg(f"  ⚠️ Need to follow user first")
             return {"status": "Not Following", "link": post_url, "msg": ""}
@@ -1095,6 +1106,22 @@ def main():
                             update_cell_with_retry(msglist_sheet, msglist_row, 9, "Profile scrape failed")
                         failed_count += 1
                         continue
+
+                    # Write scraped fields back to MsgList so the sheet stays in sync
+                    # Only fill when existing cells are empty (avoids overwriting manual values)
+                    scraped_city = clean_text(profile_data.get("CITY", ""))
+                    scraped_posts = clean_text(profile_data.get("POSTS", ""))
+                    scraped_followers = clean_text(profile_data.get("FOLLOWERS", ""))
+                    with sheet_lock:
+                        if not city and scraped_city:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 4, scraped_city)
+                            city = scraped_city
+                        if not posts and scraped_posts:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 5, scraped_posts)
+                            posts = scraped_posts
+                        if not followers and scraped_followers:
+                            update_cell_with_retry(msglist_sheet, msglist_row, 6, scraped_followers)
+                            followers = scraped_followers
                     
                     # Check if suspended
                     if profile_data.get('STATUS') == 'Suspended':
@@ -1175,6 +1202,11 @@ def main():
         log_msg(f"   ✅ Success: {success_count}/{len(pending_targets)}")
         log_msg(f"   ❌ Failed: {failed_count}/{len(pending_targets)}")
         print("="*70 + "\n")
+        
+        # Ensure GitHub connection and push changes
+        subprocess.run(['git', 'add', '.'])
+        subprocess.run(['git', 'commit', '-m', 'Update from bot run'])
+        subprocess.run(['git', 'push'])
         
     finally:
         driver.quit()
