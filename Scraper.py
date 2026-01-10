@@ -51,6 +51,7 @@ BASE_URL = "https://damadam.pk"
 COOKIE_FILE = os.environ.get("COOKIE_FILE", "damadam_cookies.pkl")
 SHEET_ID = os.environ.get("DD_SHEET_ID", "1xph0dra5-wPcgMXKubQD7A2CokObpst7o2rWbDA10t8")
 CREDENTIALS_FILE = os.environ.get("CREDENTIALS_FILE", "credentials.json")
+CHROMEDRIVER_PATH = os.environ.get("CHROMEDRIVER_PATH", "chromedriver.exe")
 
 # ============================================================================
 # HELPERS
