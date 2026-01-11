@@ -1,120 +1,104 @@
-# DD-Msg-Bot v2.2 - Clean Structure
+# DD-Msg-Bot (DamaDam Message Bot)
 
-DamaDam Message Bot with automated profile scraping and message sending capabilities.
+Automates posting messages on damadam.pk based on rows in a Google Sheet.
 
-## Features
+Current version: `V1.1.100.2`
 
-- **Auto-Create Sheets**: Automatically creates MsgList sheet with proper structure
-- **MODE Support**: Supports both `nick` and `url` modes
-- **Template Messages**: Dynamic message templates with `{{city}}`, `{{posts}}`, `{{followers}}` placeholders
-- **Thread Safety**: Built-in locks for safe concurrent operations
-- **Single Sheet Design**: Uses only MsgList sheet for simplicity
-- **Success URL Tracking**: Automatically logs successful post URLs
+## What it does
 
-## Sheet Structure
+- Reads `pending` rows from Google Sheet tab `MsgList`
+- Chooses target based on `MODE`:
+  - `url`: posts directly to a given comments URL
+  - `nick`: scrapes profile, finds an open post, then posts
+- Writes back results to `MsgList` (`STATUS`, `NOTES`, `RESULT URL`)
+- Appends run results into a second tab: `Run History` (auto-created)
 
-### MsgList Sheet
+## Google Sheet tabs
 
-| Column        | Description              | Example          |
-|---------------|-------------------------|------------------|
-| MODE          | `nick` or `url`        | nick             |
-| NAME          | Display name            | Test User 1      |
-| NICK/URL      | Nickname or direct URL  | Afshan_Qureshi   |
-| CITY          | City (auto-populated)  | Karachi          |
-| POSTS         | Post count (auto-populated) | 218       |
-| FOLLOWERS     | Followers count (auto-populated) | 150    |
-| MESSAGE       | Template message        | Hi {{name}} from {{city}}! |
-| STATUS        | Status (auto-updated)  | Done/Failed      |
-| NOTES         | Additional notes        | Manual check needed |
-| RESULT URL    | Success URL (auto-populated) | https://... |
+### 1) MsgList (required)
 
-## Message Templates
+| Column | Name | Description |
+|---|---|---|
+| A | MODE | `url` or `nick` |
+| B | NAME | Used in templates and Profiles lookup |
+| C | NICK/URL | Nickname (nick mode) OR comments URL (url mode) |
+| D | CITY | Auto-filled when available |
+| E | POSTS | Auto-filled when available |
+| F | FOLLOWERS | Auto-filled when available |
+| G | MESSAGE | Template message |
+| H | STATUS | `pending` → `Done/Failed/Skipped` |
+| I | NOTES | Notes or error summary |
+| J | RESULT URL | Cleaned URL used/succeeded |
 
-Use placeholders in your message column:
+### 2) Run History (auto-created)
 
-- `{{city}}` - User's city
-- `{{posts}}` - User's post count  
-- `{{followers}}` - User's followers count
+The bot creates this sheet if missing and **always appends** (never clears).
 
-Example: `Hi {{name}} from {{city}}! You have {{posts}} posts.`
+Columns:
+
+- `RUN ID`, `RUN TS`, `MODE`, `TARGET`, `NAME`, `STATUS`, `RESULT URL`, `MESSAGE`, `PROCESSED`, `SUCCESS`, `FAILED`, `GSHEET API CALLS`
+
+## Message templates
+
+You can use:
+
+- `{{name}}`
+- `{{city}}`
+- `{{posts}}`
+- `{{followers}}`
+
+Example:
+
+```
+Hello {{name}}! City: {{city}} | Posts: {{posts}} | Followers: {{followers}}
+```
 
 ## Setup
 
-1. **Google Sheets API**
-   - Enable Google Sheets API
-   - Create service account
-   - Download `credentials.json`
+### 1) Install dependencies
 
-2. **Environment Variables**
+```bash
+pip install -r requirements.txt
+```
 
-   ```bash
-   DD_LOGIN_EMAIL=your_username
-   DD_LOGIN_PASS=your_password
-   DD_SHEET_ID=your_sheet_id
-   ```
+### 2) Google Sheets credentials
 
-3. **Install Dependencies**
+- Create a Google Service Account
+- Download `credentials.json` into the project folder
+- Share your Google Sheet(s) with the service account email
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 3) Environment variables
+
+```bash
+DD_LOGIN_EMAIL=your_username
+DD_LOGIN_PASS=your_password
+DD_SHEET_ID=your_google_sheet_id
+
+# Optional
+DD_PROFILES_SHEET_ID=profiles_sheet_id
+DD_DEBUG=0
+DD_VERBOSE_FORMS=0
+DD_MAX_PROFILES=0
+DD_MAX_POST_PAGES=4
+DD_AUTO_PUSH=0
+```
 
 ## Usage
+
+Run normally:
 
 ```bash
 python Scraper.py
 ```
 
-The bot will:
+Limit processing:
 
-1. Connect to Google Sheets
-2. Process all "pending" targets in MsgList
-3. Update status and result URLs automatically
-4. Handle both nickname and URL modes
+```bash
+python Scraper.py --max-profiles 3
+```
 
-## Modes
+Deep form debugging (very noisy):
 
-### Nick Mode (MODE=nick)
-
-- Scrapes user profile first
-- Validates account status
-- Finds open posts automatically
-- Processes template with scraped data
-
-### URL Mode (MODE=url)
-
-- Uses direct URL without scraping
-- Processes template with provided data
-- Faster for direct post targeting
-
-## Safety Features
-
-- **Thread Locks**: Prevents concurrent sheet access issues
-- **Error Handling**: Comprehensive error recovery
-- **Verification**: Double-checks message posting
-- **Session Management**: Automatic cookie handling
-
-## Output
-
-- ✅ **Success**: Message posted and verified
-- ⚠️ **Manual Check**: Message sent, needs manual verification  
-- ❌ **Failed**: Error occurred during processing
-
-All results include success URLs for easy verification.
-
-## Clean Structure
-
-- Single `Scraper.py` file
-- No unnecessary dependencies
-- Clear separation of concerns
-- Production-ready code
-
-## Version
-
-v2.2 - Clean Structure Release
-
-- Auto-create sheet functionality
-- MODE support (nick/URL)
-- Template message processing
-- Thread safety implementation
-- Single MsgList sheet design
+```bash
+DD_DEBUG=1 DD_VERBOSE_FORMS=1 python Scraper.py --max-profiles 1
+```

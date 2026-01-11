@@ -8,8 +8,12 @@ on:
         description: "Mode to run: Msg | Inbox | Activity"
         required: false
         default: "Msg"
+      max_profiles:
+        description: "Max profiles to process (0 = unlimited)"
+        required: false
+        default: "0"
   schedule:
-    - cron: "0 */12 * * *"
+    - cron: "0 */4 * * *"
 
 concurrency:
   group: run-scraper
@@ -56,4 +60,6 @@ jobs:
           DD_SHEET_ID: ${{ secrets.DD_SHEET_ID }}
           COOKIE_FILE: ${{ secrets.COOKIE_FILE }}
           DD_MODE: ${{ github.event.inputs.mode || 'Msg' }}
+          DD_MAX_PROFILES: ${{ github.event.inputs.max_profiles || '0' }}
+          DD_AUTO_PUSH: "0"
         run: python Scraper.py
